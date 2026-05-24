@@ -2,7 +2,7 @@
 
 MVP portfolio project for a safe AI agent that analyzes tabular data with FastAPI, Streamlit, pandas, Plotly, and Gemini.
 
-## Phase 1
+## Current Scope
 
 Current scope:
 
@@ -11,6 +11,10 @@ Current scope:
 - Environment example
 - Pytest setup
 - Health check test
+- CSV/XLSX upload endpoint
+- In-memory dataset sessions
+- Dataset profiling endpoint
+- Streamlit profiling dashboard
 
 ## Run Backend
 

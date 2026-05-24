@@ -1,9 +1,9 @@
-import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 
 from backend.core.config import get_settings
-from backend.schemas import DatasetUploadResponse
+from backend.schemas import DatasetProfileResponse, DatasetUploadResponse
 from backend.services.dataset_loader import DatasetLoadError, load_dataframe
+from backend.services.profiling import dataframe_preview, profile_dataset
 from backend.services.session_store import session_store
 
 
@@ -39,8 +39,6 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetUploadResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     session = session_store.create(filename=file.filename or "uploaded_dataset", dataframe=dataframe)
-    preview_frame = dataframe.head(10).astype(object)
-    preview = preview_frame.where(pd.notna(preview_frame), None)
 
     return DatasetUploadResponse(
         session_id=session.session_id,
@@ -48,5 +46,19 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetUploadResponse:
         rows=int(dataframe.shape[0]),
         columns=int(dataframe.shape[1]),
         column_names=[str(column) for column in dataframe.columns],
-        preview=preview.to_dict(orient="records"),
+        preview=dataframe_preview(dataframe),
+    )
+
+
+@app.get("/datasets/{session_id}/profile", response_model=DatasetProfileResponse)
+def get_dataset_profile(session_id: str) -> DatasetProfileResponse:
+    session = session_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+
+    profile = profile_dataset(session.dataframe)
+    return DatasetProfileResponse(
+        session_id=session.session_id,
+        filename=session.filename,
+        **profile,
     )
