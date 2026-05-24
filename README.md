@@ -19,6 +19,7 @@ Current scope:
 - Validated chart specs and Streamlit Plotly renderer
 - Guardrails and high-confidence rule-based router
 - Gemini runtime with mockable provider, JSON parsing, retry, and tool-call validation
+- Chat query endpoint and Streamlit chat surface
 
 ## Run Backend
 

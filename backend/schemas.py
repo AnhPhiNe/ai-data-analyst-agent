@@ -65,3 +65,28 @@ class DatasetProfileResponse(BaseModel):
     numeric_summary: list[NumericSummary]
     top_categories: list[TopCategory]
     distributions: list[DistributionSpec]
+
+
+class ChatRequest(BaseModel):
+    session_id: str
+    question: str
+
+
+class ToolTraceItem(BaseModel):
+    source: str
+    tool_name: str | None = None
+    arguments: dict[str, object] | None = None
+    status: str
+    message: str
+    confidence: float | None = None
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    answer: str
+    response_type: str
+    table: list[dict[str, object]] | None = None
+    chart_spec: dict[str, object] | None = None
+    tool_trace: list[ToolTraceItem]
+    should_clarify: bool = False
+    is_blocked: bool = False

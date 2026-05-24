@@ -1,7 +1,9 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 
+from backend.agent.agent_loop import run_agent_turn
+from backend.agent.gemini_runtime import GeminiProvider, LLMProvider
 from backend.core.config import get_settings
-from backend.schemas import DatasetProfileResponse, DatasetUploadResponse
+from backend.schemas import ChatRequest, ChatResponse, DatasetProfileResponse, DatasetUploadResponse
 from backend.services.dataset_loader import DatasetLoadError, load_dataframe
 from backend.services.profiling import dataframe_preview, profile_dataset
 from backend.services.session_store import session_store
@@ -61,4 +63,23 @@ def get_dataset_profile(session_id: str) -> DatasetProfileResponse:
         session_id=session.session_id,
         filename=session.filename,
         **profile,
+    )
+
+
+def get_llm_provider() -> LLMProvider | None:
+    if not settings.gemini_api_key:
+        return None
+    return GeminiProvider(api_key=settings.gemini_api_key, model=settings.gemini_model)
+
+
+@app.post("/chat/query", response_model=ChatResponse)
+def chat_query(request: ChatRequest) -> ChatResponse:
+    session = session_store.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+
+    return run_agent_turn(
+        session=session,
+        question=request.question,
+        provider=get_llm_provider(),
     )

@@ -16,6 +16,16 @@ def fetch_profile(session_id: str) -> dict[str, object]:
     return response.json()
 
 
+def send_chat_question(session_id: str, question: str) -> dict[str, object]:
+    response = httpx.post(
+        f"{BACKEND_URL}/chat/query",
+        json={"session_id": session_id, "question": question},
+        timeout=45.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def render_distribution_chart(spec: dict[str, object]) -> None:
     data = pd.DataFrame(spec["data"])
     chart_type = spec["chart_type"]
@@ -86,7 +96,7 @@ st.caption("MVP for learning AI agents and data analysis with FastAPI, Streamlit
 
 with st.sidebar:
     st.header("Project Status")
-    st.write("Phase 5: Visualization Layer")
+    st.write("Phase 8: Chat Endpoint + Agent Loop")
     st.write(f"Backend: `{BACKEND_URL}`")
     if "session_id" in st.session_state:
         st.write(f"Session: `{st.session_state.session_id}`")
@@ -170,3 +180,51 @@ if "profile" in st.session_state:
         for spec in profile["distributions"]:
             st.write(f"`{spec['column']}`")
             render_distribution_chart(spec)
+
+    st.subheader("Chat")
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+            if message.get("table"):
+                st.dataframe(pd.DataFrame(message["table"]), use_container_width=True)
+            if message.get("chart_spec"):
+                st.json(message["chart_spec"])
+            if message.get("tool_trace"):
+                with st.expander("Tool trace"):
+                    st.json(message["tool_trace"])
+
+    question = st.chat_input("Ask a question about the uploaded dataset")
+    if question:
+        st.session_state.chat_messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.write(question)
+
+        try:
+            chat_response = send_chat_question(st.session_state.session_id, question)
+        except httpx.HTTPStatusError as exc:
+            content = exc.response.json().get("detail", "Chat request failed.")
+            assistant_message = {"role": "assistant", "content": content}
+        except httpx.RequestError:
+            assistant_message = {"role": "assistant", "content": "Could not reach the backend."}
+        else:
+            assistant_message = {
+                "role": "assistant",
+                "content": chat_response["answer"],
+                "table": chat_response.get("table"),
+                "chart_spec": chat_response.get("chart_spec"),
+                "tool_trace": chat_response.get("tool_trace"),
+            }
+
+        st.session_state.chat_messages.append(assistant_message)
+        with st.chat_message("assistant"):
+            st.write(assistant_message["content"])
+            if assistant_message.get("table"):
+                st.dataframe(pd.DataFrame(assistant_message["table"]), use_container_width=True)
+            if assistant_message.get("chart_spec"):
+                st.json(assistant_message["chart_spec"])
+            if assistant_message.get("tool_trace"):
+                with st.expander("Tool trace"):
+                    st.json(assistant_message["tool_trace"])
