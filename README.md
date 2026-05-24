@@ -18,6 +18,7 @@ Current scope:
 - Whitelisted safe pandas tool layer
 - Validated chart specs and Streamlit Plotly renderer
 - Guardrails and high-confidence rule-based router
+- Gemini runtime with mockable provider, JSON parsing, retry, and tool-call validation
 
 ## Run Backend
 
