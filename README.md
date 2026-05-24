@@ -17,6 +17,7 @@ Current scope:
 - Streamlit profiling dashboard
 - Whitelisted safe pandas tool layer
 - Validated chart specs and Streamlit Plotly renderer
+- Guardrails and high-confidence rule-based router
 
 ## Run Backend
 
