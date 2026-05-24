@@ -21,6 +21,7 @@ Current scope:
 - Gemini runtime with mockable provider, JSON parsing, retry, and tool-call validation
 - Chat query endpoint and Streamlit chat surface
 - Session-scoped clarification memory for follow-up slot filling
+- Suggested questions and light insights from profile with Gemini fallback
 
 ## Run Backend
 

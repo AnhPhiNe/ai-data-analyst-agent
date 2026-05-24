@@ -16,6 +16,12 @@ def fetch_profile(session_id: str) -> dict[str, object]:
     return response.json()
 
 
+def fetch_suggestions(session_id: str) -> dict[str, object]:
+    response = httpx.get(f"{BACKEND_URL}/datasets/{session_id}/suggestions", timeout=45.0)
+    response.raise_for_status()
+    return response.json()
+
+
 def send_chat_question(session_id: str, question: str) -> dict[str, object]:
     response = httpx.post(
         f"{BACKEND_URL}/chat/query",
@@ -96,7 +102,7 @@ st.caption("MVP for learning AI agents and data analysis with FastAPI, Streamlit
 
 with st.sidebar:
     st.header("Project Status")
-    st.write("Phase 8: Chat Endpoint + Agent Loop")
+    st.write("Phase 10: Suggested Questions + Insights")
     st.write(f"Backend: `{BACKEND_URL}`")
     if "session_id" in st.session_state:
         st.write(f"Session: `{st.session_state.session_id}`")
@@ -128,10 +134,11 @@ if uploaded_file is not None:
             st.session_state.upload_result = payload
             try:
                 st.session_state.profile = fetch_profile(payload["session_id"])
+                st.session_state.suggestions = fetch_suggestions(payload["session_id"])
             except httpx.HTTPStatusError as exc:
-                st.error(exc.response.json().get("detail", "Could not load dataset profile."))
+                st.error(exc.response.json().get("detail", "Could not load dataset profile or suggestions."))
             except httpx.RequestError:
-                st.error("Dataset uploaded, but the profile request failed.")
+                st.error("Dataset uploaded, but the profile or suggestions request failed.")
             st.success("Dataset uploaded successfully.")
 
 if "profile" in st.session_state:
@@ -180,6 +187,25 @@ if "profile" in st.session_state:
         for spec in profile["distributions"]:
             st.write(f"`{spec['column']}`")
             render_distribution_chart(spec)
+
+    if "suggestions" in st.session_state:
+        suggestions = st.session_state.suggestions
+        st.subheader("Suggested Analysis")
+        insight_col, question_col = st.columns(2)
+
+        with insight_col:
+            st.write("Light insights")
+            if not suggestions.get("insights"):
+                st.info("No suggested insights available.")
+            for insight in suggestions.get("insights", []):
+                st.markdown(f"- {insight}")
+
+        with question_col:
+            st.write("Suggested questions")
+            if not suggestions.get("questions"):
+                st.info("No suggested questions available.")
+            for suggested_question in suggestions.get("questions", []):
+                st.markdown(f"- {suggested_question}")
 
     st.subheader("Chat")
     if "chat_messages" not in st.session_state:

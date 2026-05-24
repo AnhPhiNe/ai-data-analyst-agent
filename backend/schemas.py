@@ -90,3 +90,10 @@ class ChatResponse(BaseModel):
     tool_trace: list[ToolTraceItem]
     should_clarify: bool = False
     is_blocked: bool = False
+
+
+class SuggestedContentResponse(BaseModel):
+    session_id: str
+    questions: list[str]
+    insights: list[str]
+    source: str

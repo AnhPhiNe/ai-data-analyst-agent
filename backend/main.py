@@ -2,8 +2,15 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, status
 
 from backend.agent.agent_loop import run_agent_turn
 from backend.agent.gemini_runtime import GeminiProvider, LLMProvider
+from backend.agent.suggestions import generate_suggested_content
 from backend.core.config import get_settings
-from backend.schemas import ChatRequest, ChatResponse, DatasetProfileResponse, DatasetUploadResponse
+from backend.schemas import (
+    ChatRequest,
+    ChatResponse,
+    DatasetProfileResponse,
+    DatasetUploadResponse,
+    SuggestedContentResponse,
+)
 from backend.services.dataset_loader import DatasetLoadError, load_dataframe
 from backend.services.profiling import dataframe_preview, profile_dataset
 from backend.services.session_store import session_store
@@ -63,6 +70,21 @@ def get_dataset_profile(session_id: str) -> DatasetProfileResponse:
         session_id=session.session_id,
         filename=session.filename,
         **profile,
+    )
+
+
+@app.get("/datasets/{session_id}/suggestions", response_model=SuggestedContentResponse)
+def get_dataset_suggestions(session_id: str) -> SuggestedContentResponse:
+    session = session_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+
+    suggested = generate_suggested_content(session.dataframe, provider=get_llm_provider())
+    return SuggestedContentResponse(
+        session_id=session.session_id,
+        questions=suggested.questions,
+        insights=suggested.insights,
+        source=suggested.source,
     )
 
 
