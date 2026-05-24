@@ -10,6 +10,7 @@ def _sample_dataframe() -> pd.DataFrame:
             "salary": [1200.0, 900.0, 1500.0, 1000.0],
             "tenure_years": [2, 1, 5, 3],
             "performance_score": [4.5, 3.8, 4.9, 4.1],
+            "Extracurricular_Activities": ["Yes", "No", "Yes", "Yes"],
         }
     )
 
@@ -92,7 +93,70 @@ def test_router_routes_histogram() -> None:
 
     assert decision.should_use_tool
     assert decision.tool_name == "generate_chart_spec"
-    assert decision.arguments == {"chart_type": "histogram", "x": "salary"}
+    assert decision.arguments == {"chart_type": "histogram", "x": "salary", "bins": 4}
+
+
+def test_router_routes_distribution_question_to_histogram() -> None:
+    decision = route_question(_sample_dataframe(), "Phân phối của salary trông như thế nào?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "generate_chart_spec"
+    assert decision.arguments == {"chart_type": "histogram", "x": "salary", "bins": 4}
+
+
+def test_router_fuzzy_matches_typo_for_distribution_column() -> None:
+    decision = route_question(_sample_dataframe(), "Phân phối của performance_scor thế nào?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "generate_chart_spec"
+    assert decision.arguments == {"chart_type": "histogram", "x": "performance_score", "bins": 4}
+
+
+def test_router_uses_dynamic_histogram_bins_for_larger_distribution() -> None:
+    dataframe = pd.DataFrame({"score": list(range(100))})
+
+    decision = route_question(dataframe, "Phân phối của score trông như thế nào?")
+
+    assert decision.should_use_tool
+    assert decision.arguments == {"chart_type": "histogram", "x": "score", "bins": 10}
+
+
+def test_router_routes_numeric_percentage_condition() -> None:
+    decision = route_question(_sample_dataframe(), "Tỷ lệ nhân viên có salary dưới 1000 là bao nhiêu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "conditional_percentage"
+    assert decision.arguments == {"column": "salary", "operator": "lt", "value": 1000}
+
+
+def test_router_routes_binary_category_percentage_condition() -> None:
+    decision = route_question(
+        _sample_dataframe(),
+        'Tỷ lệ phần trăm học sinh tham gia "Extracurricular_Activities" là bao nhiêu?',
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "conditional_percentage"
+    assert decision.arguments == {"column": "Extracurricular_Activities", "operator": "eq", "value": "Yes"}
+
+
+def test_router_routes_negative_binary_category_percentage_condition() -> None:
+    decision = route_question(
+        _sample_dataframe(),
+        'Tỷ lệ phần trăm học sinh không tham gia "Extracurricular_Activities" là bao nhiêu?',
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "conditional_percentage"
+    assert decision.arguments == {"column": "Extracurricular_Activities", "operator": "eq", "value": "No"}
+
+
+def test_router_routes_single_column_average_to_numeric_summary() -> None:
+    decision = route_question(_sample_dataframe(), "Tỷ lệ phần trăm performance_score trung bình là bao nhiêu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "describe_numeric"
+    assert decision.arguments == {"column": "performance_score"}
 
 
 def test_router_clarifies_ambiguous_aggregate_question() -> None:

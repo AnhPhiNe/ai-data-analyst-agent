@@ -41,6 +41,28 @@ def _sample_dataframe() -> pd.DataFrame:
     )
 
 
+def _student_like_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Parental_Education_Level": [
+                None,
+                "High School",
+                "College",
+                "College",
+                "High School",
+                "College",
+                "College",
+                "High School",
+            ],
+            "Tutoring_Sessions": [0, 1, 1, 1, 1, 2, 2, 8],
+            "Hours_Studied": [1, 10, 12, 15, 18, 21, 24, 28],
+            "Internet_Access": ["Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "Yes", "No"],
+            "Attendance": [60, 65, 70, 75, 80, 85, 90, 95],
+            "Exam_Score": [55, 58, 61, 65, 68, 72, 76, 80],
+        }
+    )
+
+
 def _upload_dataset(client: TestClient) -> str:
     csv_content = (
         "department,salary,tenure_years\n"
@@ -72,12 +94,12 @@ def test_fallback_insights_are_grounded_with_numbers() -> None:
     assert 3 <= len(suggested.insights) <= 5
     assert all(re.search(r"\d", insight) for insight in suggested.insights)
     assert any(
-        "department là cột có tỷ lệ missing cao nhất" in insight and "25%" in insight
+        "department: missing 1" in insight and "25%" in insight
         for insight in suggested.insights
     )
-    assert any("salary" in insight and "900" in insight and "1.500" in insight for insight in suggested.insights)
+    assert any("mean=" in insight and "median=" in insight and "min-max=" in insight for insight in suggested.insights)
     assert any(
-        'giá trị phổ biến nhất là "Engineering"' in insight and "2 dòng" in insight and "50%" in insight
+        'department="Engineering"' in insight and "2 dòng" in insight and "50%" in insight
         for insight in suggested.insights
     )
 
@@ -87,28 +109,32 @@ def test_generate_suggested_content_uses_gemini_and_filters_unknown_structured_c
         '{"questions":["Tính trung bình salary theo department.","Mô tả Unknown_Column."],'
         '"insights":["Cột salary có trung bình 1200, dao động từ 900 đến 1500."]}'
     )
+    fallback = generate_suggested_content(_sample_dataframe(), provider=None)
 
     suggested = generate_suggested_content(_sample_dataframe(), provider=provider)
 
     assert suggested.source == "gemini"
-    assert suggested.questions == ["Tính trung bình salary theo department."]
-    assert suggested.insights == ["Cột salary có trung bình 1200, dao động từ 900 đến 1500."]
+    assert suggested.questions[0] == "Tính trung bình salary theo department."
+    assert len(suggested.questions) > 1
+    assert suggested.insights == fallback.insights
     assert "department" in provider.prompts[0]
     assert "PROFILING_SIGNALS" in provider.prompts[0]
 
 
-def test_gemini_generic_insights_fall_back_to_deterministic_templates() -> None:
+def test_gemini_insights_are_ignored_for_deterministic_templates() -> None:
     provider = FakeProvider(
         '{"questions":["Tính trung bình salary theo department."],'
-        '"insights":["Phần lớn nhân sự thuộc Engineering."]}'
+        '"insights":["Phần lớn nhân sự thuộc Engineering.","Cột salary có trung bình 9999."]}'
     )
+    fallback = generate_suggested_content(_sample_dataframe(), provider=None)
 
     suggested = generate_suggested_content(_sample_dataframe(), provider=provider)
 
     assert suggested.source == "gemini"
-    assert suggested.questions == ["Tính trung bình salary theo department."]
-    assert all(re.search(r"\d", insight) for insight in suggested.insights)
-    assert any("Dataset có 4 dòng và 3 cột." == insight for insight in suggested.insights)
+    assert suggested.questions[0] == "Tính trung bình salary theo department."
+    assert len(suggested.questions) > 1
+    assert suggested.insights == fallback.insights
+    assert not any("9999" in insight for insight in suggested.insights)
 
 
 def test_generate_suggested_content_falls_back_on_invalid_gemini_response() -> None:
@@ -150,7 +176,7 @@ def test_outlier_insight_uses_analyst_wording() -> None:
     suggested = generate_suggested_content(dataframe, provider=None)
 
     assert any(
-        "Tutoring_Sessions xuất hiện giá trị cao bất thường" in insight and "max = 8" in insight
+        "Tutoring_Sessions: max=8" in insight and "cao bất thường" in insight
         for insight in suggested.insights
     )
     assert all("giá trị ngoại lệ là" not in insight for insight in suggested.insights)
@@ -170,7 +196,51 @@ def test_correlation_signal_and_insight_when_two_numeric_columns_exist() -> None
     signals = _build_profiling_signals(profile_dataset(_sample_dataframe()), _sample_dataframe())
 
     assert signals["correlation_candidates"]
-    assert any("tương quan" in insight and "r=" in insight for insight in suggested.insights)
+    assert any(" vs " in insight and "r=" in insight for insight in suggested.insights)
+
+
+def test_student_like_dataset_returns_five_meaningful_deterministic_insights() -> None:
+    suggested = generate_suggested_content(_student_like_dataframe(), provider=None)
+
+    assert len(suggested.insights) == 5
+    assert any("Parental_Education_Level: missing" in insight for insight in suggested.insights)
+    assert any("mean=" in insight and "min-max=" in insight for insight in suggested.insights)
+    assert any('Internet_Access="Yes"' in insight for insight in suggested.insights)
+    assert any("bất thường" in insight for insight in suggested.insights)
+    assert any("Attendance vs Exam_Score" in insight and "r=" in insight for insight in suggested.insights)
+
+
+def test_weak_correlation_is_not_highlighted() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Sleep_Hours": [6, 6, 8, 8],
+            "Previous_Scores": [70, 80, 70, 80],
+            "Attendance": [90, 80, 80, 90],
+        }
+    )
+
+    suggested = generate_suggested_content(dataframe, provider=None)
+    signals = _build_profiling_signals(profile_dataset(dataframe), dataframe)
+
+    assert signals["correlation_candidates"] == []
+    assert not any("tương quan" in insight for insight in suggested.insights)
+    assert not any("tương quan" in question for question in suggested.questions)
+
+
+def test_moderate_correlation_below_threshold_is_not_highlighted() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Study_Hours": [1, 2, 3, 4, 5, 6],
+            "Sleep_Hours": [1, 6, 2, 5, 3, 4],
+        }
+    )
+
+    suggested = generate_suggested_content(dataframe, provider=None)
+    signals = _build_profiling_signals(profile_dataset(dataframe), dataframe)
+
+    assert signals["correlation_candidates"] == []
+    assert not any("tương quan" in insight for insight in suggested.insights)
+    assert not any("tương quan" in question for question in suggested.questions)
 
 
 def test_gemini_prompt_hardens_insight_contract() -> None:
@@ -180,10 +250,8 @@ def test_gemini_prompt_hardens_insight_contract() -> None:
 
     prompt = _build_suggestions_prompt(profile, signals)
 
-    assert "Mỗi insight bắt buộc có ít nhất một số liệu cụ thể" in prompt
-    assert "Không suy diễn nguyên nhân" in prompt
-    assert "Top category insight nên theo style" in prompt
-    assert "Outlier insight không được viết" in prompt
+    assert "Không tự tạo insights" in prompt
+    assert "|r| >= 0.50" in prompt
     assert "PROFILING_SIGNALS" in prompt
     assert "correlation_candidates" in prompt
 
@@ -218,10 +286,10 @@ def test_suggestions_endpoint_uses_mock_provider(monkeypatch: pytest.MonkeyPatch
     assert response.status_code == 200
     payload = response.json()
     assert payload["source"] == "gemini"
-    assert payload["questions"] == ["Giá trị nào xuất hiện nhiều nhất trong cột department?"]
-    assert payload["insights"] == [
-        "Trong cột department, Engineering đứng hạng 1 với 2 dòng, chiếm khoảng 50% dữ liệu."
-    ]
+    assert payload["questions"][0] == "Giá trị nào xuất hiện nhiều nhất trong cột department?"
+    assert len(payload["questions"]) > 1
+    assert all(re.search(r"\d", insight) for insight in payload["insights"])
+    assert not any("đứng hạng 1" in insight for insight in payload["insights"])
 
 
 def test_suggestions_endpoint_returns_404_for_unknown_session() -> None:

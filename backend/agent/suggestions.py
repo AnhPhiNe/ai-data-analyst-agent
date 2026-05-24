@@ -12,6 +12,8 @@ from backend.services.profiling import profile_dataset
 MAX_QUESTIONS = 6
 MAX_INSIGHTS = 5
 MIN_INSIGHTS = 3
+MIN_CORRELATION_TO_HIGHLIGHT = 0.5
+MIN_TOP_CATEGORY_PERCENT = 30.0
 
 SPECULATIVE_WORDING = (
     "có thể do",
@@ -94,18 +96,14 @@ def generate_suggested_content(dataframe: pd.DataFrame, provider: LLMProvider | 
         return fallback
 
     validated_questions = _validate_questions(suggested.questions, profile)
-    validated_insights = _validate_insights(suggested.insights, profile)
 
-    if not validated_questions and not validated_insights:
-        return fallback
     if not validated_questions:
-        validated_questions = fallback.questions
-    if not validated_insights:
-        validated_insights = fallback.insights
+        return fallback
+    questions = _validate_questions(_dedupe(validated_questions + fallback.questions), profile)
 
     return SuggestedContent(
-        questions=validated_questions[:MAX_QUESTIONS],
-        insights=validated_insights[:MAX_INSIGHTS],
+        questions=questions[:MAX_QUESTIONS],
+        insights=fallback.insights,
         source="gemini",
     )
 
@@ -124,33 +122,19 @@ def _build_suggestions_prompt(profile: dict[str, Any], signals: dict[str, Any] |
         "questions": [
             "Vietnamese question grounded in existing columns only",
         ],
-        "insights": [
-            "Vietnamese insight with at least one concrete number from profiling_signals",
-        ],
+        "insights": [],
     }
     return (
         "Bạn là data analyst assistant cho dữ liệu dạng bảng.\n"
-        "Nhiệm vụ: viết lại suggested questions và suggested insights bằng tiếng Việt, dựa hoàn toàn trên PROFILE "
+        "Nhiệm vụ: viết suggested questions bằng tiếng Việt, dựa hoàn toàn trên PROFILE "
         "và PROFILING_SIGNALS bên dưới.\n\n"
-        "Luật cho insights:\n"
-        "- Mỗi insight bắt buộc có ít nhất một số liệu cụ thể: percentage, count, mean, min/max, ranking, hoặc correlation.\n"
-        "- Chỉ dùng các tín hiệu có trong top_categories, missing_values, numeric_summary, correlation_candidates, "
-        "possible_outliers, hoặc profiling_signals.\n"
-        "- Không suy diễn nguyên nhân ngoài dữ liệu. Không nói causal relationship.\n"
-        "- Không dùng 'phần lớn', 'hầu hết', 'đa số' nếu không có count hoặc percentage đi kèm trong cùng insight.\n"
-        "- Không dùng wording speculative như 'có thể do', 'nguyên nhân', 'có lẽ', 'dường như', 'nhiều khả năng'.\n"
-        "- Missing insight nên theo style: 'Cột X thiếu N giá trị, chiếm P% dữ liệu' hoặc "
-        "'X là cột có tỷ lệ missing cao nhất: N giá trị, chiếm P% dữ liệu'.\n"
-        "- Top category insight nên theo style: 'Trong cột X, giá trị phổ biến nhất là \"Y\" với N dòng, "
-        "chiếm khoảng P% dữ liệu'.\n"
-        "- Outlier insight không được viết 'một giá trị ngoại lệ là X'. Hãy viết 'X xuất hiện giá trị cao/thấp "
-        "bất thường, với max/min = N'.\n"
-        "- Ưu tiên insight theo thứ tự: missing values, numeric summary, top categories, correlation nhẹ, outlier nhẹ.\n"
-        "- Trả 3-5 insights ngắn, mỗi insight một câu.\n\n"
         "Luật cho questions:\n"
         "- Trả tối đa 6 câu hỏi, đa dạng theo missing value, aggregate, comparison, distribution, top category, correlation.\n"
+        "- Chỉ hỏi correlation nếu PROFILING_SIGNALS.correlation_candidates có item với |r| >= 0.50.\n"
         "- Chỉ nhắc tới cột thật trong PROFILE.column_names.\n"
         "- Không tạo câu hỏi vô nghĩa hoặc cần business context không có trong dữ liệu.\n\n"
+        "Luật cho insights:\n"
+        "- Không tự tạo insights. Trả insights là mảng rỗng vì backend sẽ tạo deterministic insights từ profiling signals.\n\n"
         "Chỉ trả về JSON object hợp lệ theo CONTRACT, không markdown.\n\n"
         f"PROFILE={json.dumps(safe_profile, ensure_ascii=False)}\n"
         f"PROFILING_SIGNALS={json.dumps(profiling_signals, ensure_ascii=False)}\n"
@@ -203,35 +187,9 @@ def _build_profiling_signals(
             }
             for item in missing_values[:5]
         ],
-        "numeric_mean_median": [
-            {
-                "column": item["column"],
-                "count": item["count"],
-                "mean": item["mean"],
-                "median": item["median"],
-            }
-            for item in numeric_summary[:8]
-        ],
-        "numeric_ranges": [
-            {
-                "column": item["column"],
-                "min": item["min"],
-                "max": item["max"],
-                "std": item["std"],
-            }
-            for item in numeric_summary[:8]
-        ],
-        "top_categories_with_percentage": [
-            {
-                "column": item["column"],
-                "top_value": item["values"][0]["value"],
-                "count": item["values"][0]["count"],
-                "percentage": item["values"][0]["percent"],
-                "rank": 1,
-            }
-            for item in top_categories[:8]
-            if item.get("values")
-        ],
+        "numeric_mean_median": _numeric_mean_median_signals(numeric_summary),
+        "numeric_ranges": _numeric_range_signals(numeric_summary),
+        "top_categories_with_percentage": _top_category_signals(top_categories),
         "correlation_candidates": _correlation_candidates(dataframe) if dataframe is not None else [],
         "possible_outliers": _possible_outliers(numeric_summary),
     }
@@ -280,8 +238,6 @@ def _fallback_questions(profile: dict[str, Any], signals: dict[str, Any]) -> lis
         questions.append(
             f"{candidate['column_a']} có tương quan với {candidate['column_b']} không?"
         )
-    elif len(numeric_columns) >= 2:
-        questions.append(f"{numeric_columns[0]} có tương quan với {numeric_columns[1]} không?")
 
     questions.append("Dataset có bao nhiêu dòng và bao nhiêu cột?")
 
@@ -292,16 +248,14 @@ def _fallback_insights(profile: dict[str, Any], signals: dict[str, Any] | None =
     profiling_signals = signals or _build_profiling_signals(profile)
     rows = int(profile.get("rows", 0))
     columns = int(profile.get("columns", 0))
-    insights: list[str] = [
-        f"Dataset có {_format_count(rows)} dòng và {_format_count(columns)} cột.",
-    ]
+    insights: list[str] = []
 
     missing_columns = profiling_signals.get("high_missing_columns", [])
     if missing_columns:
         item = missing_columns[0]
         insights.append(
-            f"{item['column']} là cột có tỷ lệ missing cao nhất: {_format_count(item['missing_count'])} giá trị, "
-            f"chiếm khoảng {_format_metric(item['missing_percent'])}% dữ liệu."
+            f"{item['column']}: missing {_format_count(item['missing_count'])} "
+            f"(~{_format_metric(item['missing_percent'])}%), cao nhất dataset."
         )
     else:
         insights.append(
@@ -315,33 +269,40 @@ def _fallback_insights(profile: dict[str, Any], signals: dict[str, Any] | None =
         if not matching_range:
             continue
         insights.append(
-            f"{item['column']} có trung bình {_format_metric(item['mean'])}, median {_format_metric(item['median'])}, "
-            f"dao động từ {_format_metric(matching_range['min'])} đến {_format_metric(matching_range['max'])} "
-            f"trên {_format_count(item['count'])} giá trị hợp lệ."
+            f"{item['column']}: mean={_format_metric(item['mean'])}, median={_format_metric(item['median'])}, "
+            f"min-max={_format_metric(matching_range['min'])}-{_format_metric(matching_range['max'])} "
+            f"(n={_format_count(item['count'])})."
         )
 
     for item in profiling_signals.get("top_categories_with_percentage", [])[:1]:
         insights.append(
-            f"Trong cột {item['column']}, giá trị phổ biến nhất là \"{item['top_value']}\" với "
-            f"{_format_count(item['count'])} dòng, chiếm khoảng {_format_metric(item['percentage'])}% dữ liệu."
-        )
-
-    for item in profiling_signals.get("correlation_candidates", [])[:1]:
-        insights.append(
-            f"{item['column_a']} và {item['column_b']} có tương quan {item['direction']} mức "
-            f"{item['strength']} với r={_format_metric(item['correlation'])}."
+            f"{item['column']}=\"{item['top_value']}\": {_format_count(item['count'])} dòng "
+            f"(~{_format_metric(item['percentage'])}%), category nổi bật nhất."
         )
 
     for item in profiling_signals.get("possible_outliers", [])[:1]:
         side_label = "max" if item["side"] == "max" else "min"
         direction_label = "cao" if item["side"] == "max" else "thấp"
         insights.append(
-            f"{item['column']} xuất hiện giá trị {direction_label} bất thường, với {side_label} = "
-            f"{_format_metric(item['value'])} vượt ngưỡng IQR nhẹ "
-            f"{_format_metric(item['threshold'])}."
+            f"{item['column']}: {side_label}={_format_metric(item['value'])} "
+            f"{direction_label} bất thường so với ngưỡng IQR {_format_metric(item['threshold'])}."
+        )
+
+    for item in profiling_signals.get("correlation_candidates", [])[:1]:
+        insights.append(
+            f"{item['column_a']} vs {item['column_b']}: r={_format_metric(item['correlation'])} "
+            f"({item['direction']}, mức {item['strength']})."
         )
 
     validated = _validate_insights(_dedupe(insights), profile)
+    if len(validated) < MIN_INSIGHTS:
+        validated = _validate_insights(
+            _dedupe(
+                validated
+                + [f"Dataset có {_format_count(rows)} dòng và {_format_count(columns)} cột."]
+            ),
+            profile,
+        )
     if len(validated) >= MIN_INSIGHTS:
         return validated[:MAX_INSIGHTS]
     return validated
@@ -418,9 +379,90 @@ def _mentions_unknown_structured_column(text: str, column_names: set[str]) -> bo
     tokens = set(text.replace("`", " ").replace(",", " ").split())
     for token in tokens:
         cleaned = token.strip(" .?!:;()[]{}").lower()
-        if "_" in cleaned and cleaned not in known_lower:
+        structured_name = cleaned.split("=", 1)[0].strip("'\"")
+        if "_" in structured_name and structured_name not in known_lower:
             return True
     return False
+
+
+def _numeric_mean_median_signals(numeric_summary: list[dict[str, Any]]) -> list[dict[str, object]]:
+    items = [_numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)]
+    return [
+        {
+            "column": item["column"],
+            "count": item["count"],
+            "mean": item["mean"],
+            "median": item["median"],
+        }
+        for item in sorted(items, key=_numeric_salience, reverse=True)[:8]
+    ]
+
+
+def _numeric_range_signals(numeric_summary: list[dict[str, Any]]) -> list[dict[str, object]]:
+    items = [_numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)]
+    return [
+        {
+            "column": item["column"],
+            "min": item["min"],
+            "max": item["max"],
+            "std": item["std"],
+            "range_width": item["range_width"],
+        }
+        for item in sorted(items, key=_numeric_salience, reverse=True)[:8]
+    ]
+
+
+def _numeric_signal(item: dict[str, Any]) -> dict[str, object]:
+    min_value = float(item["min"])
+    max_value = float(item["max"])
+    return {
+        "column": item["column"],
+        "count": item["count"],
+        "mean": item["mean"],
+        "median": item["median"],
+        "min": item["min"],
+        "max": item["max"],
+        "std": item["std"],
+        "range_width": round(max_value - min_value, 4),
+    }
+
+
+def _has_numeric_range(item: dict[str, Any]) -> bool:
+    if item.get("count", 0) <= 0:
+        return False
+    if item.get("min") is None or item.get("max") is None:
+        return False
+    return float(item["max"]) != float(item["min"])
+
+
+def _numeric_salience(item: dict[str, Any]) -> float:
+    mean = item.get("mean")
+    std = item.get("std")
+    range_width = float(item.get("range_width", 0.0))
+    if std is not None and mean not in (None, 0):
+        return abs(float(std) / float(mean))
+    return range_width
+
+
+def _top_category_signals(top_categories: list[dict[str, Any]]) -> list[dict[str, object]]:
+    signals = []
+    for item in top_categories:
+        if not item.get("values"):
+            continue
+        top_value = item["values"][0]
+        percentage = float(top_value["percent"])
+        if percentage < MIN_TOP_CATEGORY_PERCENT:
+            continue
+        signals.append(
+            {
+                "column": item["column"],
+                "top_value": top_value["value"],
+                "count": top_value["count"],
+                "percentage": top_value["percent"],
+                "rank": 1,
+            }
+        )
+    return sorted(signals, key=lambda item: float(item["percentage"]), reverse=True)[:8]
 
 
 def _correlation_candidates(dataframe: pd.DataFrame) -> list[dict[str, object]]:
@@ -437,6 +479,8 @@ def _correlation_candidates(dataframe: pd.DataFrame) -> list[dict[str, object]]:
             if pd.isna(coefficient):
                 continue
             coefficient = round(float(coefficient), 4)
+            if abs(coefficient) < MIN_CORRELATION_TO_HIGHLIGHT:
+                continue
             candidates.append(
                 {
                     "column_a": str(column_a),
@@ -490,11 +534,9 @@ def _correlation_strength(coefficient: float) -> str:
     absolute = abs(coefficient)
     if absolute >= 0.7:
         return "mạnh"
-    if absolute >= 0.4:
+    if absolute >= 0.5:
         return "vừa"
-    if absolute >= 0.2:
-        return "nhẹ"
-    return "yếu"
+    return "không đáng kể"
 
 
 def _find_signal_by_column(items: list[dict[str, Any]], column: str) -> dict[str, Any] | None:

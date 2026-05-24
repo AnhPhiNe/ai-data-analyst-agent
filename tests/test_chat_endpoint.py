@@ -21,11 +21,11 @@ def clear_session_store() -> None:
 
 def _upload_dataset(client: TestClient) -> str:
     csv_content = (
-        "department,salary,tenure_years,performance_score\n"
-        "Engineering,1200,2,4.5\n"
-        "Sales,900,1,3.8\n"
-        "Engineering,1500,5,4.9\n"
-        "HR,,3,4.1\n"
+        "department,salary,tenure_years,performance_score,Extracurricular_Activities\n"
+        "Engineering,1200,2,4.5,Yes\n"
+        "Sales,900,1,3.8,No\n"
+        "Engineering,1500,5,4.9,Yes\n"
+        "HR,,3,4.1,Yes\n"
     ).encode("utf-8")
     response = client.post(
         "/datasets/upload",
@@ -47,7 +47,7 @@ def test_chat_query_routes_simple_question_without_gemini() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["response_type"] == "answer"
-    assert payload["answer"] == "Dữ liệu hiện có 4 dòng và 4 cột."
+    assert payload["answer"] == "Dữ liệu hiện có 4 dòng và 5 cột."
     assert payload["tool_trace"][-1]["tool_name"] == "profile_dataset"
     assert session_store.get(session_id).chat_history[-1]["route"] == "router_tool"
 
@@ -65,6 +65,129 @@ def test_chat_query_returns_table_for_aggregate() -> None:
     payload = response.json()
     assert payload["response_type"] == "table"
     assert payload["table"][0] == {"department": "Engineering", "mean_salary": 1350.0}
+
+
+def test_chat_query_returns_histogram_for_distribution_question() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Phân phối của salary trông như thế nào?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "histogram", "x": "salary", "bins": 3}
+    assert "Histogram của salary" in payload["answer"]
+    assert payload["tool_trace"][-1]["tool_name"] == "generate_chart_spec"
+
+
+def test_chat_query_resolves_distribution_follow_up_as_histogram() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Phân phối thế nào?"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "cột performance_score"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "histogram", "x": "performance_score", "bins": 4}
+    assert payload["tool_trace"][-1]["tool_name"] == "generate_chart_spec"
+
+
+def test_chat_query_returns_percentage_for_numeric_condition() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tỷ lệ nhân viên có salary dưới 1000 là bao nhiêu?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "answer"
+    assert "1 / 3 giá trị hợp lệ của salary dưới 1000, chiếm khoảng 33.33%." == payload["answer"]
+    assert payload["table"] is None
+    assert payload["tool_trace"][-1]["tool_name"] == "conditional_percentage"
+
+
+def test_chat_query_returns_percentage_for_binary_category_condition() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": 'Tỷ lệ phần trăm học sinh tham gia "Extracurricular_Activities" là bao nhiêu?',
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "answer"
+    assert (
+        payload["answer"]
+        == "3 / 4 giá trị hợp lệ của Extracurricular_Activities bằng Yes, chiếm khoảng 75%."
+    )
+    assert payload["tool_trace"][-1]["tool_name"] == "conditional_percentage"
+
+
+def test_chat_query_single_column_average_does_not_leave_pending_aggregate() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Tỷ lệ phần trăm performance_score trung bình là bao nhiêu?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["answer"] == "performance_score trung bình là 4.33% trên 4 giá trị hợp lệ."
+    assert payload["tool_trace"][-1]["tool_name"] == "describe_numeric"
+    assert session_store.get(session_id).pending_clarification is None
+
+
+def test_chat_query_distribution_after_average_question_is_not_hijacked_by_pending() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Tỷ lệ phần trăm performance_score trung bình là bao nhiêu?",
+        },
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Phân phối của performance_scor thế nào?"},
+    )
+
+    assert second_response.status_code == 200
+    payload = second_response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "histogram", "x": "performance_score", "bins": 4}
 
 
 def test_chat_query_uses_follow_up_to_fill_aggregate_metric_and_group() -> None:

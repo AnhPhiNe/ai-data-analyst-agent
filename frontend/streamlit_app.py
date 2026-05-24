@@ -1,3 +1,5 @@
+import io
+import math
 import os
 
 import httpx
@@ -32,6 +34,13 @@ def send_chat_question(session_id: str, question: str) -> dict[str, object]:
     return response.json()
 
 
+def parse_uploaded_dataframe(filename: str, content: bytes) -> pd.DataFrame:
+    buffer = io.BytesIO(content)
+    if filename.lower().endswith(".xlsx"):
+        return pd.read_excel(buffer)
+    return pd.read_csv(buffer)
+
+
 def render_distribution_chart(spec: dict[str, object]) -> None:
     data = pd.DataFrame(spec["data"])
     chart_type = spec["chart_type"]
@@ -62,7 +71,17 @@ def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object]) -> None:
     elif chart_type == "line":
         fig = px.line(dataframe, x=spec["x"], y=spec["y"], color=spec.get("color"), title=title)
     elif chart_type == "histogram":
-        fig = px.histogram(dataframe, x=spec["x"], nbins=spec.get("bins"), title=title)
+        bins = int(spec.get("bins") or histogram_bin_count(dataframe, str(spec["x"])))
+        fig = px.histogram(
+            dataframe,
+            x=spec["x"],
+            nbins=bins,
+            title=title,
+            labels={spec["x"]: spec["x"], "count": "Count"},
+            opacity=0.85,
+        )
+        fig.update_traces(marker_line_width=1, marker_line_color="white")
+        fig.update_layout(bargap=0.05)
     elif chart_type == "scatter":
         fig = px.scatter(dataframe, x=spec["x"], y=spec["y"], color=spec.get("color"), title=title)
     elif chart_type == "box":
@@ -91,6 +110,37 @@ def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object]) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+def histogram_bin_count(dataframe: pd.DataFrame, column: str) -> int:
+    series = dataframe[column].dropna()
+    row_count = int(series.count())
+    unique_count = int(series.nunique())
+    if row_count <= 0 or unique_count <= 0:
+        return 10
+    if unique_count <= 20:
+        return max(1, unique_count)
+    rice_bins = math.ceil(2 * (row_count ** (1 / 3)))
+    return max(8, min(50, unique_count, rice_bins))
+
+
+def render_chat_artifacts(message: dict[str, object]) -> None:
+    if message.get("table"):
+        st.dataframe(pd.DataFrame(message["table"]), use_container_width=True)
+    if message.get("chart_spec"):
+        dataset_frame = st.session_state.get("dataset_frame")
+        if isinstance(dataset_frame, pd.DataFrame):
+            render_chart_spec(dataset_frame, message["chart_spec"])
+        else:
+            st.json(message["chart_spec"])
+    if message.get("tool_trace"):
+        with st.expander("Tool trace"):
+            st.json(message["tool_trace"])
+
+
+def clear_dataset_state() -> None:
+    for key in ("session_id", "upload_result", "profile", "suggestions", "dataset_frame", "chat_messages"):
+        st.session_state.pop(key, None)
+
+
 st.set_page_config(
     page_title="AI Data Analyst Agent",
     page_icon="DA",
@@ -112,10 +162,11 @@ uploaded_file = st.file_uploader("Choose a CSV or XLSX file", type=["csv", "xlsx
 
 if uploaded_file is not None:
     if st.button("Upload", type="primary"):
+        file_bytes = uploaded_file.getvalue()
         files = {
             "file": (
                 uploaded_file.name,
-                uploaded_file.getvalue(),
+                file_bytes,
                 uploaded_file.type or "application/octet-stream",
             )
         }
@@ -133,13 +184,24 @@ if uploaded_file is not None:
             st.session_state.session_id = payload["session_id"]
             st.session_state.upload_result = payload
             try:
+                st.session_state.dataset_frame = parse_uploaded_dataframe(uploaded_file.name, file_bytes)
+            except Exception:
+                st.session_state.dataset_frame = pd.DataFrame()
+            try:
                 st.session_state.profile = fetch_profile(payload["session_id"])
                 st.session_state.suggestions = fetch_suggestions(payload["session_id"])
             except httpx.HTTPStatusError as exc:
-                st.error(exc.response.json().get("detail", "Could not load dataset profile or suggestions."))
+                detail = exc.response.json().get("detail", "Could not load dataset profile or suggestions.")
+                clear_dataset_state()
+                st.error(
+                    f"{detail} Upload request succeeded, but the analysis session could not be loaded. "
+                    "If the backend just restarted, please upload once more."
+                )
             except httpx.RequestError:
-                st.error("Dataset uploaded, but the profile or suggestions request failed.")
-            st.success("Dataset uploaded successfully.")
+                clear_dataset_state()
+                st.error("Dataset upload reached the backend, but profile/suggestions could not be loaded.")
+            else:
+                st.success("Dataset uploaded successfully.")
 
 if "profile" in st.session_state:
     profile = st.session_state.profile
@@ -214,13 +276,7 @@ if "profile" in st.session_state:
     for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-            if message.get("table"):
-                st.dataframe(pd.DataFrame(message["table"]), use_container_width=True)
-            if message.get("chart_spec"):
-                st.json(message["chart_spec"])
-            if message.get("tool_trace"):
-                with st.expander("Tool trace"):
-                    st.json(message["tool_trace"])
+            render_chat_artifacts(message)
 
     question = st.chat_input("Ask a question about the uploaded dataset")
     if question:
@@ -247,10 +303,4 @@ if "profile" in st.session_state:
         st.session_state.chat_messages.append(assistant_message)
         with st.chat_message("assistant"):
             st.write(assistant_message["content"])
-            if assistant_message.get("table"):
-                st.dataframe(pd.DataFrame(assistant_message["table"]), use_container_width=True)
-            if assistant_message.get("chart_spec"):
-                st.json(assistant_message["chart_spec"])
-            if assistant_message.get("tool_trace"):
-                with st.expander("Tool trace"):
-                    st.json(assistant_message["tool_trace"])
+            render_chat_artifacts(assistant_message)

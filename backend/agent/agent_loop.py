@@ -238,14 +238,41 @@ def _generate_answer(question: str, tool_result: ToolResult) -> str:
         details = ", ".join(f"{row['column']}: {row['missing_count']}" for row in missing_rows)
         return f"Dữ liệu có giá trị thiếu ở các cột sau: {details}."
 
+    if tool_result.tool_name == "describe_numeric":
+        answer = _describe_numeric_answer(question, tool_result.table or [])
+        if answer:
+            return answer
+
     if tool_result.tool_name == "correlation_analysis":
         answer = _correlation_answer(question, tool_result.table or [])
         if answer:
             return answer
 
+    if tool_result.tool_name == "conditional_percentage" and isinstance(tool_result.data, dict):
+        column = tool_result.data.get("column")
+        condition = _condition_answer_label(
+            str(column),
+            str(tool_result.data.get("operator")),
+            tool_result.data.get("value"),
+        )
+        matched_rows = tool_result.data.get("matched_rows")
+        valid_rows = tool_result.data.get("valid_rows")
+        percent = tool_result.data.get("percent_of_valid")
+        return (
+            f"{_format_number(matched_rows)} / {_format_number(valid_rows)} giá trị hợp lệ của {column} "
+            f"{condition}, chiếm khoảng {_format_number(percent)}%."
+        )
+
     if tool_result.tool_name == "generate_chart_spec":
         chart_type = (tool_result.chart_spec or {}).get("chart_type", "chart")
-        return f"Đã tạo chart spec dạng {chart_type}. Frontend có thể render trực tiếp spec này."
+        if chart_type == "histogram":
+            column = (tool_result.chart_spec or {}).get("x", "cột đã chọn")
+            bins = (tool_result.chart_spec or {}).get("bins", 20)
+            return (
+                f"Histogram của {column} hiển thị tần suất các giá trị theo khoảng; "
+                f"trục X là {column}, trục Y là số bản ghi, chia khoảng {bins} bins."
+            )
+        return f"Đã tạo biểu đồ dạng {chart_type} cho các cột đã chọn."
 
     if tool_result.table:
         return f"Đã tính xong bảng kết quả bằng tool '{tool_result.tool_name}'."
@@ -294,6 +321,10 @@ def _try_resolve_pending_clarification(
 ) -> ChatResponse | None:
     pending = session.pending_clarification
     if pending is None:
+        return None
+
+    if _is_new_standalone_intent(question, str(pending.get("intent"))):
+        session_store.clear_pending_clarification(session.session_id)
         return None
 
     traces.append(
@@ -385,6 +416,8 @@ def _build_pending_from_question(session: DatasetSession, question: str, message
     operation = _detect_aggregation_operation(question)
     if operation is not None:
         metric_column, group_by = _infer_metric_and_group(session, question)
+        if metric_column is not None and not _has_group_intent(normalized):
+            return None
         return {
             "intent": "aggregate_metric",
             "operation": operation,
@@ -394,7 +427,7 @@ def _build_pending_from_question(session: DatasetSession, question: str, message
             "message": message,
         }
 
-    if any(token in normalized for token in ("bieu do", "chart", "plot", "histogram", "scatter", "heatmap")):
+    if any(token in normalized for token in ("bieu do", "chart", "plot", "histogram", "phan phoi", "scatter", "heatmap")):
         metric_column, group_by = _infer_metric_and_group(session, question)
         return {
             "intent": "generate_chart_spec",
@@ -413,6 +446,18 @@ def _build_pending_from_question(session: DatasetSession, question: str, message
             "message": message,
         }
     return None
+
+
+def _is_new_standalone_intent(question: str, pending_intent: str) -> bool:
+    normalized = _normalize_text(question)
+    chart_tokens = ("phan phoi", "bieu do", "chart", "plot", "histogram", "scatter", "heatmap")
+    if pending_intent != "generate_chart_spec" and any(token in normalized for token in chart_tokens):
+        return True
+    return False
+
+
+def _has_group_intent(normalized: str) -> bool:
+    return any(token in normalized for token in ("theo nhom", "by group", "group by", "theo"))
 
 
 def _resolve_pending_aggregate(
@@ -469,7 +514,14 @@ def _resolve_pending_chart(
     pending["metric_column"] = metric_column
     pending["group_by"] = group_by
     if chart_type == "histogram" and isinstance(metric_column, str):
-        return {"tool_name": "generate_chart_spec", "arguments": {"chart_type": "histogram", "x": metric_column}}
+        return {
+            "tool_name": "generate_chart_spec",
+            "arguments": {
+                "chart_type": "histogram",
+                "x": metric_column,
+                "bins": _histogram_bins(session, metric_column),
+            },
+        }
     if not isinstance(metric_column, str) or not isinstance(group_by, str):
         return None
     return {
@@ -559,6 +611,18 @@ def _detect_pending_chart_type(text: str) -> str:
     if "box" in normalized:
         return "box"
     return "bar"
+
+
+def _histogram_bins(session: DatasetSession, column: str) -> int:
+    series = session.dataframe[column].dropna()
+    row_count = int(series.count())
+    unique_count = int(series.nunique())
+    if row_count <= 0 or unique_count <= 0:
+        return 10
+    if unique_count <= 20:
+        return max(1, unique_count)
+    rice_bins = math.ceil(2 * (row_count ** (1 / 3)))
+    return max(8, min(50, unique_count, rice_bins))
 
 
 def _repair_tool_arguments(
@@ -734,6 +798,29 @@ def _correlation_answer(question: str, table: list[dict[str, Any]]) -> str | Non
     )
 
 
+def _describe_numeric_answer(question: str, table: list[dict[str, Any]]) -> str | None:
+    if len(table) != 1:
+        return None
+    row = table[0]
+    column = row.get("column")
+    normalized = _normalize_text(question)
+    mean = row.get("mean")
+    median = row.get("median")
+    min_value = row.get("min")
+    max_value = row.get("max")
+    count = row.get("count")
+    suffix = "%" if any(token in normalized for token in ("ty le phan tram", "phan tram", "percent", "percentage")) else ""
+
+    if any(token in normalized for token in ("trung binh", "average", "mean", "avg")):
+        return f"{column} trung bình là {_format_number(mean)}{suffix} trên {_format_number(count)} giá trị hợp lệ."
+
+    return (
+        f"{column}: mean={_format_number(mean)}{suffix}, median={_format_number(median)}, "
+        f"min-max={_format_number(min_value)}-{_format_number(max_value)} "
+        f"(n={_format_number(count)})."
+    )
+
+
 def _find_target_in_correlation_table(question: str, table: list[dict[str, Any]]) -> str | None:
     normalized_question = _normalize_text(question)
     columns = [str(row.get("column")) for row in table if row.get("column") is not None]
@@ -776,4 +863,20 @@ def _format_number(value: Any) -> str:
         return f"{value:,}".replace(",", ".")
     if isinstance(value, float) and value.is_integer():
         return f"{int(value):,}".replace(",", ".")
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
     return str(value)
+
+
+def _condition_answer_label(column: str, operator: str, value: Any) -> str:
+    labels = {
+        "lt": f"dưới {value}",
+        "lte": f"nhỏ hơn hoặc bằng {value}",
+        "gt": f"trên {value}",
+        "gte": f"lớn hơn hoặc bằng {value}",
+        "eq": f"bằng {value}",
+        "ne": f"khác {value}",
+        "is_missing": "bị thiếu",
+        "is_not_missing": "không bị thiếu",
+    }
+    return labels.get(operator, f"thỏa điều kiện {operator} {value}")

@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import difflib
+import math
 from typing import Any, Literal
 import re
 import unicodedata
@@ -35,11 +37,37 @@ def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
     if _has_any(normalized, ("bao nhieu cot", "bao nhiêu cột", "number of columns", "so cot", "số cột")):
         return _tool("profile_dataset", {}, 0.96)
 
+    if _has_any(normalized, ("ty le", "tỷ lệ", "phan tram", "phần trăm", "percent", "percentage")):
+        column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
+        condition = _extract_numeric_condition(normalized)
+        if column is not None and condition is not None:
+            if _is_numeric_column(dataframe, column):
+                operator, value = condition
+                return _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.93)
+            return _clarify(f"Cột '{column}' không phải numeric. Hãy chọn một cột numeric để tính tỷ lệ.")
+        if column is not None and not _is_numeric_column(dataframe, column):
+            categorical_condition = _extract_categorical_percentage_condition(dataframe, column, normalized)
+            if categorical_condition is not None:
+                operator, value = categorical_condition
+                return _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.92)
+
     if _has_any(normalized, ("nhung cot nao", "những cột nào", "danh sach cot", "danh sách cột", "list columns", "columns")):
         return _tool("list_columns", {}, 0.95)
 
     if _has_any(normalized, ("thieu du lieu", "thiếu dữ liệu", "missing", "null", "na values", "cot nao thieu", "cột nào thiếu")):
         return _tool("detect_missing_values", {}, 0.95)
+
+    if _has_any(normalized, ("phan phoi", "phân phối", "distribution", "histogram")):
+        column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
+        if column is not None:
+            if _is_numeric_column(dataframe, column):
+                return _tool(
+                    "generate_chart_spec",
+                    {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
+                    0.93,
+                )
+            return _clarify(f"Cột '{column}' không phải numeric. Hãy chọn một cột numeric để vẽ phân phối.")
+        return _clarify("Bạn muốn xem phân phối của cột numeric nào?")
 
     if _has_any(normalized, ("mo ta", "mô tả", "describe", "summary", "thong ke", "thống kê")):
         column = _find_column(dataframe, normalized)
@@ -58,14 +86,21 @@ def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
     aggregate_operation = _detect_aggregation(normalized)
     if aggregate_operation is not None:
         metric_column = _find_metric_column(dataframe, normalized)
-        group_column = _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
+        has_group_intent = _has_group_intent(normalized)
+        group_column = (
+            _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
+            if has_group_intent
+            else None
+        )
         if metric_column and group_column:
             return _tool(
                 "aggregate_metric",
                 {"metric_column": metric_column, "group_by": group_column, "operation": aggregate_operation},
                 0.9,
             )
-        if _has_any(normalized, ("theo nhom", "theo nhóm", "by group", "group by", "theo")):
+        if metric_column and not has_group_intent:
+            return _tool("describe_numeric", {"column": metric_column}, 0.91)
+        if has_group_intent:
             return _clarify("Bạn muốn tính metric nào và nhóm theo cột nào?")
 
     if _has_any(
@@ -83,6 +118,9 @@ def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
             "heatmap",
             "boxplot",
             "pie chart",
+            "phan phoi",
+            "phân phối",
+            "distribution",
         ),
     ):
         chart_type = _detect_chart_type(normalized)
@@ -92,7 +130,11 @@ def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
         if chart_type == "histogram":
             column = metric_column or _find_column(dataframe, normalized)
             if column and _is_numeric_column(dataframe, column):
-                return _tool("generate_chart_spec", {"chart_type": "histogram", "x": column}, 0.9)
+                return _tool(
+                    "generate_chart_spec",
+                    {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
+                    0.9,
+                )
 
         if chart_type == "correlation_heatmap":
             return _tool("generate_chart_spec", {"chart_type": "correlation_heatmap"}, 0.88)
@@ -134,6 +176,10 @@ def _detect_aggregation(normalized: str) -> str | None:
     return None
 
 
+def _has_group_intent(normalized: str) -> bool:
+    return _has_any(normalized, ("theo nhom", "theo nhóm", "by group", "group by", "theo"))
+
+
 def _detect_chart_type(normalized: str) -> str:
     if _has_any(normalized, ("scatter", "phan tan", "phân tán")):
         return "scatter"
@@ -148,6 +194,61 @@ def _detect_chart_type(normalized: str) -> str:
     if _has_any(normalized, ("pie", "tron", "tròn")):
         return "pie"
     return "bar"
+
+
+def _histogram_bins(dataframe: pd.DataFrame, column: str) -> int:
+    series = dataframe[column].dropna()
+    row_count = int(series.count())
+    unique_count = int(series.nunique())
+    if row_count <= 0 or unique_count <= 0:
+        return 10
+    if unique_count <= 20:
+        return max(1, unique_count)
+    rice_bins = math.ceil(2 * (row_count ** (1 / 3)))
+    return max(8, min(50, unique_count, rice_bins))
+
+
+def _extract_numeric_condition(normalized: str) -> tuple[str, float] | None:
+    patterns = (
+        (r"(duoi|nho hon|less than|below|under)\s+(-?\d+(?:\.\d+)?)", "lt"),
+        (r"(toi da|nho hon hoac bang|at most|less than or equal)\s+(-?\d+(?:\.\d+)?)", "lte"),
+        (r"(tren|lon hon|greater than|above|over)\s+(-?\d+(?:\.\d+)?)", "gt"),
+        (r"(toi thieu|lon hon hoac bang|at least|greater than or equal)\s+(-?\d+(?:\.\d+)?)", "gte"),
+        (r"(bang|equal to)\s+(-?\d+(?:\.\d+)?)", "eq"),
+    )
+    for pattern, operator in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            value = float(match.group(2))
+            if value.is_integer():
+                return operator, int(value)
+            return operator, value
+    return None
+
+
+def _extract_categorical_percentage_condition(
+    dataframe: pd.DataFrame, column: str, normalized: str
+) -> tuple[str, str] | None:
+    values = [str(value) for value in dataframe[column].dropna().astype(str).unique()]
+    value_lookup = {_normalize(value): value for value in values}
+    for normalized_value, original_value in value_lookup.items():
+        if re.search(rf"(?<!\w){re.escape(normalized_value)}(?!\w)", normalized):
+            return "eq", original_value
+
+    yes_value = _find_categorical_value(value_lookup, ("yes", "true", "co", "1"))
+    no_value = _find_categorical_value(value_lookup, ("no", "false", "khong", "0"))
+    if no_value is not None and any(token in normalized for token in ("khong tham gia", "khong co", "khong")):
+        return "eq", no_value
+    if yes_value is not None and any(token in normalized for token in ("tham gia", "co", "yes")):
+        return "eq", yes_value
+    return None
+
+
+def _find_categorical_value(value_lookup: dict[str, str], candidates: tuple[str, ...]) -> str | None:
+    for candidate in candidates:
+        if candidate in value_lookup:
+            return value_lookup[candidate]
+    return None
 
 
 def _find_metric_column(dataframe: pd.DataFrame, normalized: str) -> str | None:
@@ -180,9 +281,13 @@ def _matching_columns(dataframe: pd.DataFrame, normalized: str) -> list[str]:
     for column in dataframe.columns:
         column_name = str(column)
         normalized_column = _normalize_identifier(column_name)
-        if re.search(rf"(?<!\w){re.escape(normalized_column)}(?!\w)", normalized):
+        if _contains_normalized_column(normalized, normalized_column):
             matches.append(column_name)
-    return matches
+    if matches:
+        return matches
+
+    close_match = _find_close_column_name(normalized, [str(column) for column in dataframe.columns])
+    return [close_match] if close_match else []
 
 
 def _extract_top_n(normalized: str) -> int:
@@ -211,3 +316,29 @@ def _normalize(text: str) -> str:
 
 def _normalize_identifier(identifier: str) -> str:
     return _normalize(identifier.replace("_", " "))
+
+
+def _contains_normalized_column(normalized_text: str, normalized_column: str) -> bool:
+    if re.search(rf"(?<!\w){re.escape(normalized_column)}(?!\w)", normalized_text):
+        return True
+    return normalized_column.replace(" ", "") in normalized_text.replace(" ", "")
+
+
+def _find_close_column_name(normalized_text: str, columns: list[str]) -> str | None:
+    lookup = {_normalize_identifier(column): column for column in columns}
+    tokens = normalized_text.split()
+    phrases = set()
+    for size in range(1, min(4, len(tokens)) + 1):
+        for start in range(0, len(tokens) - size + 1):
+            phrases.add(" ".join(tokens[start : start + size]))
+    phrases.add(normalized_text)
+
+    best_score = 0.0
+    best_column = None
+    for phrase in phrases:
+        for normalized_column, column in lookup.items():
+            score = difflib.SequenceMatcher(None, phrase.replace(" ", ""), normalized_column.replace(" ", "")).ratio()
+            if score > best_score:
+                best_score = score
+                best_column = column
+    return best_column if best_score >= 0.86 else None

@@ -100,6 +100,18 @@ def _validate_tool_specific_arguments(
             "limit": _bounded_int(arguments.get("limit", 20), "limit", 1, 100),
         }
 
+    if tool_name == "conditional_percentage":
+        column = _required_string(arguments, "column")
+        operator = _required_string(arguments, "operator").lower()
+        value = arguments.get("value")
+        _require_column(dataframe, column)
+        _validate_filter_operator(dataframe[column], operator, value)
+        return {
+            "column": column,
+            "operator": operator,
+            "value": value,
+        }
+
     if tool_name == "correlation_analysis":
         columns = arguments.get("columns")
         if columns is None:

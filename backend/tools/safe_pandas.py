@@ -232,8 +232,43 @@ def filter_rows_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
         tool_name="filter_rows",
         status="success",
         message=f"Filtered {int(mask.sum())} matching row(s) for '{column}' {operator}.",
-        data={"matched_rows": int(mask.sum()), "returned_rows": int(len(filtered))},
+        data={
+            "matched_rows": int(mask.sum()),
+            "returned_rows": int(len(filtered)),
+            "total_rows": int(len(dataframe)),
+        },
         table=_records(filtered),
+    )
+
+
+def conditional_percentage_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+    column = _required_string(arguments, "column")
+    operator = _required_string(arguments, "operator").lower()
+    value = arguments.get("value")
+
+    _require_column(dataframe, column)
+    mask = _build_filter_mask(dataframe[column], operator, value)
+    valid_mask = dataframe[column].notna()
+    valid_rows = int(valid_mask.sum())
+    matched_rows = int((mask & valid_mask).sum())
+    total_rows = int(len(dataframe))
+    percent_of_valid = round((matched_rows / valid_rows * 100) if valid_rows else 0.0, 2)
+    percent_of_rows = round((matched_rows / total_rows * 100) if total_rows else 0.0, 2)
+
+    return ToolResult(
+        tool_name="conditional_percentage",
+        status="success",
+        message=f"Computed percentage for '{column}' {operator}.",
+        data={
+            "column": column,
+            "operator": operator,
+            "value": value,
+            "matched_rows": matched_rows,
+            "valid_rows": valid_rows,
+            "total_rows": total_rows,
+            "percent_of_valid": percent_of_valid,
+            "percent_of_rows": percent_of_rows,
+        },
     )
 
 
@@ -313,6 +348,23 @@ def _build_filter_mask(series: pd.Series, operator: str, value: Any) -> pd.Serie
     raise ToolValidationError(f"Unsupported filter operator '{operator}'.")
 
 
+def _condition_label(column: str, operator: str, value: Any) -> str:
+    labels = {
+        "gt": ">",
+        "gte": ">=",
+        "lt": "<",
+        "lte": "<=",
+        "eq": "=",
+        "ne": "!=",
+    }
+    if operator == "is_missing":
+        return f"{column} is missing"
+    if operator == "is_not_missing":
+        return f"{column} is not missing"
+    symbol = labels.get(operator, operator)
+    return f"{column} {symbol} {value}"
+
+
 def _validate_safe_arguments(arguments: dict[str, Any]) -> None:
     for key, value in arguments.items():
         if key.lower() in DANGEROUS_ARG_KEYS or key.startswith("__"):
@@ -382,6 +434,11 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
     ),
     "sort_values": ToolDefinition("sort_values", "Sort rows by a column.", sort_values_tool),
     "filter_rows": ToolDefinition("filter_rows", "Filter rows using a safe operator.", filter_rows_tool),
+    "conditional_percentage": ToolDefinition(
+        "conditional_percentage",
+        "Calculate the percentage of rows matching a safe condition.",
+        conditional_percentage_tool,
+    ),
     "correlation_analysis": ToolDefinition(
         "correlation_analysis",
         "Compute a correlation matrix for numeric columns.",

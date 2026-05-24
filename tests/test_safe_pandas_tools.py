@@ -25,6 +25,7 @@ def test_registry_contains_only_expected_mvp_tools() -> None:
         "aggregate_metric",
         "sort_values",
         "filter_rows",
+        "conditional_percentage",
         "correlation_analysis",
         "generate_chart_spec",
     }
@@ -138,8 +139,29 @@ def test_filter_rows_supports_numeric_operator() -> None:
     result = execute_tool(_sample_dataframe(), "filter_rows", {"column": "salary", "operator": "gt", "value": 1000})
 
     assert result.status == "success"
-    assert result.data == {"matched_rows": 2, "returned_rows": 2}
+    assert result.data == {"matched_rows": 2, "returned_rows": 2, "total_rows": 5}
     assert {row["department"] for row in result.table} == {"Engineering"}
+
+
+def test_conditional_percentage_returns_percent_of_valid_rows() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "conditional_percentage",
+        {"column": "salary", "operator": "lt", "value": 1000},
+    )
+
+    assert result.status == "success"
+    assert result.data == {
+        "column": "salary",
+        "operator": "lt",
+        "value": 1000,
+        "matched_rows": 2,
+        "valid_rows": 4,
+        "total_rows": 5,
+        "percent_of_valid": 50.0,
+        "percent_of_rows": 40.0,
+    }
+    assert result.table is None
 
 
 def test_filter_rows_supports_contains_operator() -> None:
