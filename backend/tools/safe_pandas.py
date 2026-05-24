@@ -7,6 +7,7 @@ from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.profiling import profile_dataset
+from backend.visualization.chart_specs import ChartSpecValidationError, validate_chart_spec
 
 
 ToolStatus = Literal["success", "error"]
@@ -262,58 +263,20 @@ def correlation_analysis_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]
 
 
 def generate_chart_spec_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
-    chart_type = _required_string(arguments, "chart_type").lower()
-    allowed_chart_types = {"bar", "line", "histogram", "scatter", "correlation_heatmap", "box", "pie"}
-    if chart_type not in allowed_chart_types:
-        raise ToolValidationError(f"Unsupported chart type '{chart_type}'.")
-
-    chart_spec = _build_chart_spec(dataframe, chart_type, arguments)
+    chart_spec = _validated_chart_spec(dataframe, arguments)
     return ToolResult(
         tool_name="generate_chart_spec",
         status="success",
-        message=f"Generated a {chart_type} chart spec.",
+        message=f"Generated a {chart_spec['chart_type']} chart spec.",
         chart_spec=chart_spec,
     )
 
 
-def _build_chart_spec(dataframe: pd.DataFrame, chart_type: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if chart_type == "correlation_heatmap":
-        columns = arguments.get("columns", _numeric_columns(dataframe))
-        if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns):
-            raise ToolValidationError("'columns' must be a list of column names.")
-        for column in columns:
-            _require_column(dataframe, column)
-            _require_numeric(dataframe, column)
-        if len(columns) < 2:
-            raise ToolValidationError("Correlation heatmap requires at least two numeric columns.")
-        return {"chart_type": chart_type, "columns": columns}
-
-    x = _required_string(arguments, "x")
-    _require_column(dataframe, x)
-
-    if chart_type == "histogram":
-        _require_numeric(dataframe, x)
-        return {"chart_type": chart_type, "x": x}
-
-    if chart_type == "pie":
-        if int(dataframe[x].nunique(dropna=True)) > 10:
-            raise ToolValidationError("Pie chart is allowed only for categories with 10 or fewer values.")
-        y = arguments.get("y")
-        if y is not None:
-            if not isinstance(y, str):
-                raise ToolValidationError("'y' must be a string.")
-            _require_column(dataframe, y)
-            _require_numeric(dataframe, y)
-        return {"chart_type": chart_type, "names": x, "values": y}
-
-    y = _required_string(arguments, "y")
-    _require_column(dataframe, y)
-    _require_numeric(dataframe, y)
-
-    if chart_type == "scatter":
-        _require_numeric(dataframe, x)
-
-    return {"chart_type": chart_type, "x": x, "y": y}
+def _validated_chart_spec(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return validate_chart_spec(arguments, dataframe)
+    except ChartSpecValidationError as exc:
+        raise ToolValidationError(str(exc)) from exc
 
 
 def _build_filter_mask(series: pd.Series, operator: str, value: Any) -> pd.Series:

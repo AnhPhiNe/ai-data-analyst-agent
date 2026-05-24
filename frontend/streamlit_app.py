@@ -3,6 +3,7 @@ import os
 import httpx
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 
@@ -31,6 +32,49 @@ def render_distribution_chart(spec: dict[str, object]) -> None:
     fig.update_layout(height=320, margin={"l": 20, "r": 20, "t": 20, "b": 20})
     st.plotly_chart(fig, use_container_width=True)
 
+
+def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object]) -> None:
+    chart_type = spec.get("chart_type")
+    title = spec.get("title")
+
+    if dataframe.empty:
+        st.caption("No chart data available.")
+        return
+
+    if chart_type == "bar":
+        fig = px.bar(dataframe, x=spec["x"], y=spec["y"], color=spec.get("color"), title=title)
+    elif chart_type == "line":
+        fig = px.line(dataframe, x=spec["x"], y=spec["y"], color=spec.get("color"), title=title)
+    elif chart_type == "histogram":
+        fig = px.histogram(dataframe, x=spec["x"], nbins=spec.get("bins"), title=title)
+    elif chart_type == "scatter":
+        fig = px.scatter(dataframe, x=spec["x"], y=spec["y"], color=spec.get("color"), title=title)
+    elif chart_type == "box":
+        fig = px.box(dataframe, x=spec.get("x"), y=spec["y"], color=spec.get("color"), title=title)
+    elif chart_type == "pie":
+        fig = px.pie(dataframe, names=spec["names"], values=spec.get("values"), title=title)
+    elif chart_type == "correlation_heatmap":
+        columns = spec["columns"]
+        correlation = dataframe[columns].corr(numeric_only=True)
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=correlation.values,
+                x=correlation.columns,
+                y=correlation.index,
+                colorscale="RdBu",
+                zmin=-1,
+                zmax=1,
+            )
+        )
+        fig.update_layout(title=title)
+    else:
+        st.error("Unsupported chart type.")
+        return
+
+    fig.update_layout(height=420, margin={"l": 20, "r": 20, "t": 48 if title else 20, "b": 20})
+    st.plotly_chart(fig, use_container_width=True)
+
+
 st.set_page_config(
     page_title="AI Data Analyst Agent",
     page_icon="DA",
@@ -42,7 +86,7 @@ st.caption("MVP for learning AI agents and data analysis with FastAPI, Streamlit
 
 with st.sidebar:
     st.header("Project Status")
-    st.write("Phase 3: Profiling Dashboard")
+    st.write("Phase 5: Visualization Layer")
     st.write(f"Backend: `{BACKEND_URL}`")
     if "session_id" in st.session_state:
         st.write(f"Session: `{st.session_state.session_id}`")
