@@ -11,6 +11,7 @@ class DatasetSession:
     filename: str
     dataframe: pd.DataFrame
     chat_history: list[dict[str, object]] = field(default_factory=list)
+    pending_clarification: dict[str, object] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -42,6 +43,15 @@ class InMemorySessionStore:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+
+    def set_pending_clarification(self, session_id: str, pending: dict[str, object] | None) -> None:
+        session = self.get(session_id)
+        if session is None:
+            return
+        session.pending_clarification = pending
+
+    def clear_pending_clarification(self, session_id: str) -> None:
+        self.set_pending_clarification(session_id, None)
 
     def clear(self) -> None:
         self._sessions.clear()

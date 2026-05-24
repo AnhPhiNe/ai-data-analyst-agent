@@ -41,6 +41,12 @@ def run_agent_turn(
         _remember(session.session_id, question, response.answer, "guardrails")
         return response
 
+    if session.pending_clarification is not None:
+        pending_response = _try_resolve_pending_clarification(session, question, traces)
+        if pending_response is not None:
+            _remember(session.session_id, question, pending_response.answer, "clarification_followup")
+            return pending_response
+
     router_decision = route_question(session.dataframe, question)
     traces.append(
         ToolTraceItem(
@@ -55,6 +61,7 @@ def run_agent_turn(
 
     if router_decision.route_type == "clarify":
         response = _clarification_response(session.session_id, router_decision.message or "Ban co the noi ro hon khong?", traces)
+        _set_pending_from_question(session, question, response.answer)
         _remember(session.session_id, question, response.answer, "router_clarify")
         return response
 
@@ -109,6 +116,7 @@ def run_agent_turn(
 
     if gemini_result.status == "clarify":
         response = _clarification_response(session.session_id, gemini_result.message, traces)
+        _set_pending_from_question(session, question, response.answer)
         _remember(session.session_id, question, response.answer, "gemini_clarify")
         return response
 
@@ -177,7 +185,9 @@ def _execute_validated_tool(
         )
     )
     if not validation.is_valid:
-        return _clarification_response(session.session_id, f"Tool call chua hop le: {validation.message}", traces)
+        response = _clarification_response(session.session_id, f"Tool call chua hop le: {validation.message}", traces)
+        _set_pending_from_tool_call(session, question, tool_name, arguments, response.answer)
+        return response
 
     tool_result = execute_tool(session.dataframe, tool_name, validation.normalized_arguments)
     traces.append(
@@ -191,6 +201,7 @@ def _execute_validated_tool(
     )
 
     if tool_result.status == "error":
+        session_store.clear_pending_clarification(session.session_id)
         return ChatResponse(
             session_id=session.session_id,
             answer=f"Khong the thuc thi tool '{tool_name}': {tool_result.message}",
@@ -199,6 +210,7 @@ def _execute_validated_tool(
         )
 
     answer = _generate_answer(question, tool_result)
+    session_store.clear_pending_clarification(session.session_id)
     return ChatResponse(
         session_id=session.session_id,
         answer=answer,
@@ -273,6 +285,280 @@ def _safe_profile_summary(session: DatasetSession) -> dict[str, Any]:
 
 def _remember(session_id: str, question: str, answer: str, route: str) -> None:
     session_store.add_chat_turn(session_id=session_id, question=question, answer=answer, route=route)
+
+
+def _try_resolve_pending_clarification(
+    session: DatasetSession,
+    question: str,
+    traces: list[ToolTraceItem],
+) -> ChatResponse | None:
+    pending = session.pending_clarification
+    if pending is None:
+        return None
+
+    traces.append(
+        ToolTraceItem(
+            source="memory",
+            tool_name=str(pending.get("intent")) if pending.get("intent") else None,
+            arguments=pending,
+            status="pending",
+            message="Đang nối câu trả lời mới với yêu cầu cần làm rõ trước đó.",
+        )
+    )
+
+    intent = pending.get("intent")
+    if intent == "aggregate_metric":
+        resolved = _resolve_pending_aggregate(session, question, pending)
+    elif intent == "generate_chart_spec":
+        resolved = _resolve_pending_chart(session, question, pending)
+    elif intent == "correlation_analysis":
+        resolved = _resolve_pending_correlation(session, question, pending)
+    else:
+        session_store.clear_pending_clarification(session.session_id)
+        return None
+
+    if resolved is None:
+        response = _clarification_response(
+            session.session_id,
+            "Mình vẫn chưa xác định đủ cột cần dùng. Bạn hãy nêu rõ metric và nhóm, ví dụ: salary và department.",
+            traces,
+        )
+        session_store.set_pending_clarification(session.session_id, pending)
+        return response
+
+    traces.append(
+        ToolTraceItem(
+            source="memory",
+            tool_name=resolved["tool_name"],
+            arguments=resolved["arguments"],
+            status="resolved",
+            message="Đã điền đủ thông tin từ follow-up.",
+        )
+    )
+    return _execute_validated_tool(
+        session=session,
+        question=str(pending.get("original_question", question)),
+        tool_name=resolved["tool_name"],
+        arguments=resolved["arguments"],
+        traces=traces,
+        source="memory",
+    )
+
+
+def _set_pending_from_question(session: DatasetSession, question: str, message: str) -> None:
+    pending = _build_pending_from_question(session, question, message)
+    if pending is not None:
+        session_store.set_pending_clarification(session.session_id, pending)
+
+
+def _set_pending_from_tool_call(
+    session: DatasetSession,
+    question: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    message: str,
+) -> None:
+    if tool_name == "aggregate_metric":
+        pending = {
+            "intent": "aggregate_metric",
+            "operation": str(arguments.get("operation", _detect_aggregation_operation(question) or "mean")),
+            "metric_column": arguments.get("metric_column"),
+            "group_by": arguments.get("group_by"),
+            "original_question": question,
+            "message": message,
+        }
+        session_store.set_pending_clarification(session.session_id, pending)
+    elif tool_name == "correlation_analysis":
+        session_store.set_pending_clarification(
+            session.session_id,
+            {
+                "intent": "correlation_analysis",
+                "target_column": None,
+                "original_question": question,
+                "message": message,
+            },
+        )
+
+
+def _build_pending_from_question(session: DatasetSession, question: str, message: str) -> dict[str, object] | None:
+    normalized = _normalize_text(question)
+    operation = _detect_aggregation_operation(question)
+    if operation is not None:
+        metric_column, group_by = _infer_metric_and_group(session, question)
+        return {
+            "intent": "aggregate_metric",
+            "operation": operation,
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "original_question": question,
+            "message": message,
+        }
+
+    if any(token in normalized for token in ("bieu do", "chart", "plot", "histogram", "scatter", "heatmap")):
+        metric_column, group_by = _infer_metric_and_group(session, question)
+        return {
+            "intent": "generate_chart_spec",
+            "chart_type": _detect_pending_chart_type(question),
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "original_question": question,
+            "message": message,
+        }
+
+    if any(token in normalized for token in ("tuong quan", "lien quan", "correlation")):
+        return {
+            "intent": "correlation_analysis",
+            "target_column": _find_mentioned_numeric_column(session, question),
+            "original_question": question,
+            "message": message,
+        }
+    return None
+
+
+def _resolve_pending_aggregate(
+    session: DatasetSession,
+    follow_up: str,
+    pending: dict[str, object],
+) -> dict[str, Any] | None:
+    metric_column = pending.get("metric_column")
+    group_by = pending.get("group_by")
+    follow_metric, follow_group = _infer_metric_and_group(session, follow_up)
+
+    if metric_column is None and follow_metric is not None:
+        metric_column = follow_metric
+    if group_by is None and follow_group is not None:
+        group_by = follow_group
+
+    if metric_column is None or group_by is None:
+        columns = _mentioned_columns(session, follow_up)
+        for column in columns:
+            if metric_column is None and _is_numeric_dataset_column(session, column):
+                metric_column = column
+            elif group_by is None and column != metric_column:
+                group_by = column
+
+    pending["metric_column"] = metric_column
+    pending["group_by"] = group_by
+    if not isinstance(metric_column, str) or not isinstance(group_by, str):
+        return None
+
+    return {
+        "tool_name": "aggregate_metric",
+        "arguments": {
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "operation": str(pending.get("operation", "mean")),
+        },
+    }
+
+
+def _resolve_pending_chart(
+    session: DatasetSession,
+    follow_up: str,
+    pending: dict[str, object],
+) -> dict[str, Any] | None:
+    metric_column = pending.get("metric_column")
+    group_by = pending.get("group_by")
+    follow_metric, follow_group = _infer_metric_and_group(session, follow_up)
+    if metric_column is None and follow_metric is not None:
+        metric_column = follow_metric
+    if group_by is None and follow_group is not None:
+        group_by = follow_group
+
+    chart_type = str(pending.get("chart_type", "bar"))
+    pending["metric_column"] = metric_column
+    pending["group_by"] = group_by
+    if chart_type == "histogram" and isinstance(metric_column, str):
+        return {"tool_name": "generate_chart_spec", "arguments": {"chart_type": "histogram", "x": metric_column}}
+    if not isinstance(metric_column, str) or not isinstance(group_by, str):
+        return None
+    return {
+        "tool_name": "generate_chart_spec",
+        "arguments": {"chart_type": chart_type, "x": group_by, "y": metric_column},
+    }
+
+
+def _resolve_pending_correlation(
+    session: DatasetSession,
+    follow_up: str,
+    pending: dict[str, object],
+) -> dict[str, Any] | None:
+    target_column = pending.get("target_column")
+    if target_column is None:
+        target_column = _find_mentioned_numeric_column(session, follow_up)
+    pending["target_column"] = target_column
+    if not isinstance(target_column, str):
+        return None
+
+    columns = [
+        str(column)
+        for column in session.dataframe.columns
+        if _is_numeric_dataset_column(session, str(column))
+    ]
+    if target_column not in columns:
+        columns.insert(0, target_column)
+    return {"tool_name": "correlation_analysis", "arguments": {"columns": columns}}
+
+
+def _infer_metric_and_group(session: DatasetSession, text: str) -> tuple[str | None, str | None]:
+    metric_column: str | None = None
+    group_by: str | None = None
+    for column in _mentioned_columns(session, text):
+        if _is_numeric_dataset_column(session, column):
+            if metric_column is None:
+                metric_column = column
+        elif group_by is None:
+            group_by = column
+    return metric_column, group_by
+
+
+def _mentioned_columns(session: DatasetSession, text: str) -> list[str]:
+    normalized = _normalize_text(text)
+    matches = []
+    for column in session.dataframe.columns:
+        column_name = str(column)
+        normalized_column = _normalize_text(column_name.replace("_", " "))
+        if _contains_normalized_column(normalized, normalized_column):
+            matches.append(column_name)
+    if matches:
+        return matches
+
+    close_match = _find_close_column_name(text, [str(column) for column in session.dataframe.columns])
+    return [close_match] if close_match else []
+
+
+def _is_numeric_dataset_column(session: DatasetSession, column: str) -> bool:
+    return is_numeric_dtype(session.dataframe[column]) and not is_bool_dtype(session.dataframe[column])
+
+
+def _detect_aggregation_operation(text: str) -> str | None:
+    normalized = _normalize_text(text)
+    if any(token in normalized for token in ("trung binh", "average", "mean", "avg")):
+        return "mean"
+    if any(token in normalized for token in ("tong", "sum", "total")):
+        return "sum"
+    if "median" in normalized or "trung vi" in normalized:
+        return "median"
+    if "min" in normalized or "nho nhat" in normalized:
+        return "min"
+    if "max" in normalized or "lon nhat" in normalized or "cao nhat" in normalized:
+        return "max"
+    return None
+
+
+def _detect_pending_chart_type(text: str) -> str:
+    normalized = _normalize_text(text)
+    if "histogram" in normalized or "phan phoi" in normalized:
+        return "histogram"
+    if "scatter" in normalized or "phan tan" in normalized:
+        return "scatter"
+    if "line" in normalized or "duong" in normalized:
+        return "line"
+    if "pie" in normalized or "tron" in normalized:
+        return "pie"
+    if "box" in normalized:
+        return "box"
+    return "bar"
 
 
 def _repair_tool_arguments(

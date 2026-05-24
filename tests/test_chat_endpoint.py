@@ -67,6 +67,89 @@ def test_chat_query_returns_table_for_aggregate() -> None:
     assert payload["table"][0] == {"department": "Engineering", "mean_salary": 1350.0}
 
 
+def test_chat_query_uses_follow_up_to_fill_aggregate_metric_and_group() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tinh trung binh theo nhom"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+    assert session_store.get(session_id).pending_clarification["intent"] == "aggregate_metric"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary va department"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "table"
+    assert payload["table"][0] == {"department": "Engineering", "mean_salary": 1350.0}
+    assert any(trace["source"] == "memory" and trace["status"] == "resolved" for trace in payload["tool_trace"])
+    assert session_store.get(session_id).pending_clarification is None
+
+
+def test_chat_query_uses_single_column_follow_up_when_metric_is_known() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "department,region,salary,tenure_years\n"
+        "Engineering,North,1200,2\n"
+        "Sales,South,900,1\n"
+        "Engineering,North,1500,5\n"
+        "HR,West,1000,3\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("hr.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tinh trung binh salary theo nhom"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "department"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "table"
+    assert payload["table"][0]["department"] == "Engineering"
+    assert payload["table"][0]["mean_salary"] == 1350.0
+
+
+def test_chat_query_keeps_pending_when_follow_up_is_still_ambiguous() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tinh trung binh theo nhom"},
+    )
+    assert first_response.status_code == 200
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "clarification"
+    assert payload["should_clarify"] is True
+    pending = session_store.get(session_id).pending_clarification
+    assert pending["metric_column"] == "salary"
+    assert pending["group_by"] is None
+
+
 def test_chat_query_blocks_guardrail_request() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
