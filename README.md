@@ -15,6 +15,7 @@ Current scope:
 - In-memory dataset sessions
 - Dataset profiling endpoint
 - Streamlit profiling dashboard
+- Whitelisted safe pandas tool layer
 
 ## Run Backend
 

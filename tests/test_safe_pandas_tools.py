@@ -1,0 +1,200 @@
+import pandas as pd
+
+from backend.tools.safe_pandas import TOOL_REGISTRY, execute_tool
+
+
+def _sample_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "department": ["Engineering", "Sales", "Engineering", "HR", "Sales"],
+            "salary": [1200.0, 900.0, 1500.0, None, 950.0],
+            "tenure_years": [2, 1, 5, 3, 2],
+            "performance_score": [4.5, 3.8, 4.9, 4.1, None],
+            "is_manager": [True, False, True, False, False],
+        }
+    )
+
+
+def test_registry_contains_only_expected_mvp_tools() -> None:
+    assert set(TOOL_REGISTRY) == {
+        "list_columns",
+        "profile_dataset",
+        "describe_numeric",
+        "detect_missing_values",
+        "value_counts",
+        "aggregate_metric",
+        "sort_values",
+        "filter_rows",
+        "correlation_analysis",
+        "generate_chart_spec",
+    }
+
+
+def test_execute_tool_rejects_unknown_tool() -> None:
+    result = execute_tool(_sample_dataframe(), "run_python", {"code": "print('nope')"})
+
+    assert result.status == "error"
+    assert "not allowed" in result.message
+
+
+def test_execute_tool_rejects_dangerous_argument_keys() -> None:
+    result = execute_tool(_sample_dataframe(), "list_columns", {"__class__": "bad"})
+
+    assert result.status == "error"
+    assert "not allowed" in result.message
+
+
+def test_list_columns_returns_columns_and_dtypes() -> None:
+    result = execute_tool(_sample_dataframe(), "list_columns")
+
+    assert result.status == "success"
+    assert result.data == {
+        "columns": ["department", "salary", "tenure_years", "performance_score", "is_manager"]
+    }
+    assert result.table[0] == {"column": "department", "dtype": "object"}
+
+
+def test_profile_dataset_returns_profile_summary() -> None:
+    result = execute_tool(_sample_dataframe(), "profile_dataset")
+
+    assert result.status == "success"
+    assert result.data["rows"] == 5
+    assert result.data["columns"] == 5
+    assert "numeric_summary" in result.data
+
+
+def test_describe_numeric_for_one_column() -> None:
+    result = execute_tool(_sample_dataframe(), "describe_numeric", {"column": "salary"})
+
+    assert result.status == "success"
+    assert result.table == [
+        {
+            "column": "salary",
+            "count": 4,
+            "mean": 1137.5,
+            "std": 275.0,
+            "min": 900.0,
+            "median": 1075.0,
+            "max": 1500.0,
+        }
+    ]
+
+
+def test_describe_numeric_rejects_non_numeric_column() -> None:
+    result = execute_tool(_sample_dataframe(), "describe_numeric", {"column": "department"})
+
+    assert result.status == "error"
+    assert "must be numeric" in result.message
+
+
+def test_detect_missing_values_returns_all_columns() -> None:
+    result = execute_tool(_sample_dataframe(), "detect_missing_values")
+
+    assert result.status == "success"
+    salary_row = next(row for row in result.table if row["column"] == "salary")
+    assert salary_row == {"column": "salary", "missing_count": 1, "missing_percent": 20.0}
+
+
+def test_value_counts_returns_top_categories() -> None:
+    result = execute_tool(_sample_dataframe(), "value_counts", {"column": "department", "top_n": 2})
+
+    assert result.status == "success"
+    assert result.table == [
+        {"value": "Engineering", "count": 2, "percent": 40.0},
+        {"value": "Sales", "count": 2, "percent": 40.0},
+    ]
+
+
+def test_aggregate_metric_groups_numeric_metric() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "aggregate_metric",
+        {"metric_column": "salary", "group_by": "department", "operation": "mean"},
+    )
+
+    assert result.status == "success"
+    assert result.table[0] == {"department": "Engineering", "mean_salary": 1350.0}
+
+
+def test_aggregate_metric_rejects_missing_column() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "aggregate_metric",
+        {"metric_column": "unknown", "group_by": "department", "operation": "mean"},
+    )
+
+    assert result.status == "error"
+    assert "does not exist" in result.message
+
+
+def test_sort_values_returns_ordered_rows() -> None:
+    result = execute_tool(_sample_dataframe(), "sort_values", {"column": "salary", "ascending": False, "limit": 2})
+
+    assert result.status == "success"
+    assert [row["salary"] for row in result.table] == [1500.0, 1200.0]
+
+
+def test_filter_rows_supports_numeric_operator() -> None:
+    result = execute_tool(_sample_dataframe(), "filter_rows", {"column": "salary", "operator": "gt", "value": 1000})
+
+    assert result.status == "success"
+    assert result.data == {"matched_rows": 2, "returned_rows": 2}
+    assert {row["department"] for row in result.table} == {"Engineering"}
+
+
+def test_filter_rows_supports_contains_operator() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "filter_rows",
+        {"column": "department", "operator": "contains", "value": "eng"},
+    )
+
+    assert result.status == "success"
+    assert result.data["matched_rows"] == 2
+
+
+def test_correlation_analysis_returns_matrix() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "correlation_analysis",
+        {"columns": ["salary", "tenure_years", "performance_score"]},
+    )
+
+    assert result.status == "success"
+    assert result.table[0]["column"] == "salary"
+    assert "tenure_years" in result.table[0]
+
+
+def test_generate_chart_spec_validates_bar_chart_columns() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "generate_chart_spec",
+        {"chart_type": "bar", "x": "department", "y": "salary"},
+    )
+
+    assert result.status == "success"
+    assert result.chart_spec == {"chart_type": "bar", "x": "department", "y": "salary"}
+
+
+def test_generate_chart_spec_rejects_scatter_with_non_numeric_x() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "generate_chart_spec",
+        {"chart_type": "scatter", "x": "department", "y": "salary"},
+    )
+
+    assert result.status == "error"
+    assert "must be numeric" in result.message
+
+
+def test_generate_chart_spec_rejects_high_cardinality_pie() -> None:
+    dataframe = pd.DataFrame({"category": [f"item_{index}" for index in range(11)], "amount": range(11)})
+
+    result = execute_tool(
+        dataframe,
+        "generate_chart_spec",
+        {"chart_type": "pie", "x": "category", "y": "amount"},
+    )
+
+    assert result.status == "error"
+    assert "10 or fewer" in result.message
