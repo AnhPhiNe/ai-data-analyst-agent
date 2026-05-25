@@ -7,6 +7,7 @@ from typing import Any, Literal, Protocol
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from backend.agent.column_argument_repair import repair_tool_column_arguments
 from backend.agent.tool_validation import validate_tool_call
 from backend.tools.safe_pandas import TOOL_REGISTRY
 
@@ -117,7 +118,8 @@ def choose_tool_with_gemini(
             raw_response=raw_response,
         )
 
-    validation = validate_tool_call(dataframe, selection.tool_name, selection.arguments)
+    repaired_arguments = repair_tool_column_arguments(dataframe, selection.tool_name, selection.arguments)
+    validation = validate_tool_call(dataframe, selection.tool_name, repaired_arguments)
     if not validation.is_valid:
         return GeminiRuntimeResult(
             status="clarify",

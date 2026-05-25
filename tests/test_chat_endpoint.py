@@ -146,6 +146,70 @@ def test_chat_query_returns_percentage_for_binary_category_condition() -> None:
     assert payload["tool_trace"][-1]["tool_name"] == "conditional_percentage"
 
 
+def test_chat_query_routes_pairwise_correlation_without_gemini() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary co tuong quan voi performance_score khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "correlation_analysis"
+    assert payload["tool_trace"][-1]["arguments"] == {"columns": ["salary", "performance_score"]}
+    assert "tương quan" in payload["answer"]
+
+
+def test_chat_query_returns_negative_correlations_for_score_alias() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "Hours_Studied,Sleep_Hours,Exam_Score\n"
+        "1,9,60\n"
+        "2,8,70\n"
+        "3,7,80\n"
+        "4,6,90\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("scores.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Những cột nào có tương quan âm với cột điểm?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "correlation_analysis"
+    assert payload["tool_trace"][-1]["arguments"] == {"columns": ["Exam_Score", "Hours_Studied", "Sleep_Hours"]}
+    assert "Sleep_Hours" in payload["answer"]
+    assert "Hours_Studied" not in payload["answer"]
+    assert "tương quan âm" in payload["answer"]
+
+
+def test_chat_query_routes_score_alias_for_grouped_average() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Điểm trung bình theo department là bao nhiêu?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "aggregate_metric"
+    assert payload["tool_trace"][-1]["arguments"]["metric_column"] == "performance_score"
+    assert payload["tool_trace"][-1]["arguments"]["group_by"] == "department"
+
+
 def test_chat_query_single_column_average_does_not_leave_pending_aggregate() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
@@ -322,6 +386,178 @@ def test_chat_query_uses_mock_gemini_when_router_falls_back(monkeypatch: pytest.
     assert any(trace["source"] == "gemini" for trace in payload["tool_trace"])
 
 
+def test_chat_query_uses_gemini_when_router_detects_conflicting_intents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"aggregate_metric",'
+        '"arguments":{"metric_column":"salary","group_by":"department","operation":"mean"}}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Ve bieu do salary trung binh theo department"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][0]["source"] == "router"
+    assert payload["tool_trace"][0]["status"] == "fallback"
+    assert "conflicting intents" in payload["tool_trace"][0]["message"]
+    assert any(trace["source"] == "gemini" for trace in payload["tool_trace"])
+    assert payload["tool_trace"][-1]["tool_name"] == "aggregate_metric"
+
+
+def test_chat_query_aggregate_answer_is_specific() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "diem trung binh theo department la bao nhieu?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "performance_score trung bình theo department" in payload["answer"]
+    assert "Engineering" in payload["answer"]
+    assert "aggregate_metric" not in payload["answer"]
+
+
+def test_chat_query_repairs_chart_axis_aliases_from_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"generate_chart_spec",'
+        '"arguments":{"chart_type":"bar","x_axis":"phong ban","y_axis":"diem"}}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"]["x"] == "department"
+    assert payload["chart_spec"]["y"] == "performance_score"
+
+
+def test_chat_query_new_direct_route_clears_stale_pending_after_invalid_tool(
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tinh trung binh theo nhom"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+    assert session_store.get(session_id).pending_clarification is not None
+
+    second_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Ty le performance_score trung binh la bao nhieu?"},
+    )
+
+    assert second_response.status_code == 200
+    payload = second_response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "describe_numeric"
+    assert session_store.get(session_id).pending_clarification is None
+
+
+def test_chat_query_repairs_vietnamese_column_args_for_aggregate_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"aggregate_metric",'
+        '"arguments":{"metric_column":"diem","group_by":"phong ban","operation":"mean"}}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    validation_trace = next(trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation")
+    assert validation_trace["arguments"]["metric_column"] == "performance_score"
+    assert validation_trace["arguments"]["group_by"] == "department"
+
+
+def test_chat_query_repairs_vietnamese_column_args_for_chart_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"generate_chart_spec",'
+        '"arguments":{"chart_type":"histogram","x":"diem","bins":4}}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"]["x"] == "performance_score"
+
+
+def test_chat_query_repairs_vietnamese_column_args_for_filter_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    csv_content = (
+        "Region,Monthly_Revenue,Product_Category\n"
+        "North,1200,A\n"
+        "South,900,B\n"
+        "North,1500,A\n"
+        "West,700,C\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("sales.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"filter_rows",'
+        '"arguments":{"column":"doanh thu","operator":"gt","value":1000}}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert len(payload["table"]) == 2
+    validation_trace = next(trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation")
+    assert validation_trace["arguments"]["column"] == "Monthly_Revenue"
+
+
 def test_chat_query_repairs_missing_correlation_target_and_explains_result(monkeypatch: pytest.MonkeyPatch) -> None:
     client = TestClient(app)
     csv_content = (
@@ -359,6 +595,44 @@ def test_chat_query_repairs_missing_correlation_target_and_explains_result(monke
     validation_trace = next(trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation")
     assert validation_trace["arguments"]["columns"][0] == "Exam_Score"
     assert any(trace["source"] == "agent_repair" for trace in payload["tool_trace"])
+
+
+def test_chat_query_resolves_vietnamese_score_alias_as_correlation_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    csv_content = (
+        "Hours_Studied,Attendance,Sleep_Hours,Previous_Scores,Exam_Score\n"
+        "1,60,8,50,55\n"
+        "2,65,7,55,60\n"
+        "3,70,8,60,68\n"
+        "4,80,6,65,78\n"
+        "5,90,7,70,88\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("students.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":1,"tool_name":"correlation_analysis",'
+        '"arguments":{"columns":["Hours_Studied","Attendance","Sleep_Hours","Previous_Scores"]},'
+        '"message":"Đang phân tích tương quan."}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tương quan giữa các cột còn lại với cột điểm"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "Exam_Score" in payload["answer"]
+    validation_trace = next(trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation")
+    assert validation_trace["arguments"]["columns"][0] == "Exam_Score"
+    assert payload["tool_trace"][0]["source"] == "router"
 
 
 def test_chat_query_clarifies_when_correlation_target_column_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

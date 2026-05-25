@@ -41,7 +41,7 @@ def parse_uploaded_dataframe(filename: str, content: bytes) -> pd.DataFrame:
     return pd.read_csv(buffer)
 
 
-def render_distribution_chart(spec: dict[str, object]) -> None:
+def render_distribution_chart(spec: dict[str, object], chart_key: str | None = None) -> None:
     data = pd.DataFrame(spec["data"])
     chart_type = spec["chart_type"]
 
@@ -55,12 +55,12 @@ def render_distribution_chart(spec: dict[str, object]) -> None:
         fig = px.bar(data, x="category", y="count", labels={"category": spec["x_label"], "count": spec["y_label"]})
 
     fig.update_layout(height=320, margin={"l": 20, "r": 20, "t": 20, "b": 20})
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
-def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object]) -> None:
+def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object], chart_key: str | None = None) -> None:
     chart_type = spec.get("chart_type")
-    title = spec.get("title")
+    title = spec.get("title") or default_chart_title(spec)
 
     if dataframe.empty:
         st.caption("No chart data available.")
@@ -91,23 +91,59 @@ def render_chart_spec(dataframe: pd.DataFrame, spec: dict[str, object]) -> None:
     elif chart_type == "correlation_heatmap":
         columns = spec["columns"]
         correlation = dataframe[columns].corr(numeric_only=True)
+        labels = correlation.round(2).astype(str).values if len(columns) <= 10 else None
+        heatmap_height = max(420, min(720, 72 * len(columns)))
         fig = go.Figure(
             data=go.Heatmap(
                 z=correlation.values,
                 x=correlation.columns,
                 y=correlation.index,
-                colorscale="RdBu",
+                text=labels,
+                texttemplate="%{text}" if labels is not None else None,
+                hovertemplate="<b>%{y}</b> vs <b>%{x}</b><br>r=%{z:.3f}<extra></extra>",
+                colorscale=[
+                    [0.0, "#b2182b"],
+                    [0.25, "#ef8a62"],
+                    [0.5, "#f7f7f7"],
+                    [0.75, "#67a9cf"],
+                    [1.0, "#2166ac"],
+                ],
                 zmin=-1,
+                zmid=0,
                 zmax=1,
+                colorbar={"title": "r", "thickness": 14, "len": 0.82},
+                xgap=1,
+                ygap=1,
             )
         )
-        fig.update_layout(title=title)
+        fig.update_xaxes(side="bottom", tickangle=-35, automargin=True)
+        fig.update_yaxes(autorange="reversed", automargin=True)
+        fig.update_layout(
+            title=title,
+            height=heatmap_height,
+            xaxis_title=None,
+            yaxis_title=None,
+            plot_bgcolor="white",
+        )
     else:
         st.error("Unsupported chart type.")
         return
 
-    fig.update_layout(height=420, margin={"l": 20, "r": 20, "t": 48 if title else 20, "b": 20})
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(margin={"l": 20, "r": 20, "t": 56 if title else 24, "b": 48})
+    if chart_type != "correlation_heatmap":
+        fig.update_layout(height=420)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
+
+
+def default_chart_title(spec: dict[str, object]) -> str | None:
+    chart_type = spec.get("chart_type")
+    if chart_type == "correlation_heatmap":
+        return "Correlation heatmap"
+    if chart_type == "histogram" and spec.get("x"):
+        return f"Distribution of {spec['x']}"
+    if chart_type in {"bar", "line", "scatter"} and spec.get("x") and spec.get("y"):
+        return f"{spec['y']} by {spec['x']}"
+    return None
 
 
 def histogram_bin_count(dataframe: pd.DataFrame, column: str) -> int:
@@ -122,13 +158,14 @@ def histogram_bin_count(dataframe: pd.DataFrame, column: str) -> int:
     return max(8, min(50, unique_count, rice_bins))
 
 
-def render_chat_artifacts(message: dict[str, object]) -> None:
+def render_chat_artifacts(message: dict[str, object], message_index: int | None = None) -> None:
+    message_id = message.get("id") or message_index or "current"
     if message.get("table"):
         st.dataframe(pd.DataFrame(message["table"]), use_container_width=True)
     if message.get("chart_spec"):
         dataset_frame = st.session_state.get("dataset_frame")
         if isinstance(dataset_frame, pd.DataFrame):
-            render_chart_spec(dataset_frame, message["chart_spec"])
+            render_chart_spec(dataset_frame, message["chart_spec"], chart_key=f"chat-chart-{message_id}")
         else:
             st.json(message["chart_spec"])
     if message.get("tool_trace"):
@@ -137,7 +174,15 @@ def render_chat_artifacts(message: dict[str, object]) -> None:
 
 
 def clear_dataset_state() -> None:
-    for key in ("session_id", "upload_result", "profile", "suggestions", "dataset_frame", "chat_messages"):
+    for key in (
+        "session_id",
+        "upload_result",
+        "profile",
+        "suggestions",
+        "dataset_frame",
+        "chat_messages",
+        "pending_chat_question",
+    ):
         st.session_state.pop(key, None)
 
 
@@ -148,11 +193,11 @@ st.set_page_config(
 )
 
 st.title("AI Data Analyst Agent")
-st.caption("MVP for learning AI agents and data analysis with FastAPI, Streamlit, and safe pandas tools.")
+st.caption("Safe tabular data analysis with FastAPI, Streamlit, pandas tools, Plotly, and optional Gemini.")
 
 with st.sidebar:
     st.header("Project Status")
-    st.write("Phase 10: Suggested Questions + Insights")
+    st.write("Portfolio build: end-to-end agent workflow")
     st.write(f"Backend: `{BACKEND_URL}`")
     if "session_id" in st.session_state:
         st.write(f"Session: `{st.session_state.session_id}`")
@@ -160,17 +205,19 @@ with st.sidebar:
 st.subheader("Upload Dataset")
 uploaded_file = st.file_uploader("Choose a CSV or XLSX file", type=["csv", "xlsx"])
 
-if uploaded_file is not None:
-    if st.button("Upload", type="primary"):
-        file_bytes = uploaded_file.getvalue()
-        files = {
-            "file": (
-                uploaded_file.name,
-                file_bytes,
-                uploaded_file.type or "application/octet-stream",
-            )
-        }
+upload_clicked = st.button("Upload", type="primary", disabled=uploaded_file is None)
 
+if upload_clicked and uploaded_file is not None:
+    file_bytes = uploaded_file.getvalue()
+    files = {
+        "file": (
+            uploaded_file.name,
+            file_bytes,
+            uploaded_file.type or "application/octet-stream",
+        )
+    }
+
+    with st.spinner("Uploading and profiling dataset..."):
         try:
             response = httpx.post(f"{BACKEND_URL}/datasets/upload", files=files, timeout=30.0)
             response.raise_for_status()
@@ -181,6 +228,7 @@ if uploaded_file is not None:
             st.error("Could not reach the backend. Start FastAPI first, then try again.")
         else:
             payload = response.json()
+            clear_dataset_state()
             st.session_state.session_id = payload["session_id"]
             st.session_state.upload_result = payload
             try:
@@ -246,9 +294,9 @@ if "profile" in st.session_state:
     with chart_tab:
         if not profile["distributions"]:
             st.info("No distribution charts available.")
-        for spec in profile["distributions"]:
+        for index, spec in enumerate(profile["distributions"]):
             st.write(f"`{spec['column']}`")
-            render_distribution_chart(spec)
+            render_distribution_chart(spec, chart_key=f"profile-distribution-{index}-{spec['column']}")
 
     if "suggestions" in st.session_state:
         suggestions = st.session_state.suggestions
@@ -266,41 +314,56 @@ if "profile" in st.session_state:
             st.write("Suggested questions")
             if not suggestions.get("questions"):
                 st.info("No suggested questions available.")
-            for suggested_question in suggestions.get("questions", []):
-                st.markdown(f"- {suggested_question}")
+            for index, suggested_question in enumerate(suggestions.get("questions", [])):
+                if st.button(
+                    str(suggested_question),
+                    key=f"suggested-question-{index}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pending_chat_question = str(suggested_question)
+                    st.rerun()
 
     st.subheader("Chat")
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
 
-    for message in st.session_state.chat_messages:
+    for index, message in enumerate(st.session_state.chat_messages):
         with st.chat_message(message["role"]):
             st.write(message["content"])
-            render_chat_artifacts(message)
+            render_chat_artifacts(message, message_index=index)
 
-    question = st.chat_input("Ask a question about the uploaded dataset")
+    pending_question = st.session_state.pop("pending_chat_question", None)
+    typed_question = st.chat_input("Ask a question about the uploaded dataset")
+    question = pending_question or typed_question
     if question:
-        st.session_state.chat_messages.append({"role": "user", "content": question})
+        user_message = {"id": len(st.session_state.chat_messages), "role": "user", "content": question}
+        st.session_state.chat_messages.append(user_message)
         with st.chat_message("user"):
             st.write(question)
 
-        try:
-            chat_response = send_chat_question(st.session_state.session_id, question)
-        except httpx.HTTPStatusError as exc:
-            content = exc.response.json().get("detail", "Chat request failed.")
-            assistant_message = {"role": "assistant", "content": content}
-        except httpx.RequestError:
-            assistant_message = {"role": "assistant", "content": "Could not reach the backend."}
-        else:
-            assistant_message = {
-                "role": "assistant",
-                "content": chat_response["answer"],
-                "table": chat_response.get("table"),
-                "chart_spec": chat_response.get("chart_spec"),
-                "tool_trace": chat_response.get("tool_trace"),
-            }
+        with st.spinner("Analyzing question..."):
+            try:
+                chat_response = send_chat_question(st.session_state.session_id, question)
+            except httpx.HTTPStatusError as exc:
+                content = exc.response.json().get("detail", "Chat request failed.")
+                assistant_message = {"id": len(st.session_state.chat_messages), "role": "assistant", "content": content}
+            except httpx.RequestError:
+                assistant_message = {
+                    "id": len(st.session_state.chat_messages),
+                    "role": "assistant",
+                    "content": "Could not reach the backend.",
+                }
+            else:
+                assistant_message = {
+                    "id": len(st.session_state.chat_messages),
+                    "role": "assistant",
+                    "content": chat_response["answer"],
+                    "table": chat_response.get("table"),
+                    "chart_spec": chat_response.get("chart_spec"),
+                    "tool_trace": chat_response.get("tool_trace"),
+                }
 
         st.session_state.chat_messages.append(assistant_message)
         with st.chat_message("assistant"):
             st.write(assistant_message["content"])
-            render_chat_artifacts(assistant_message)
+            render_chat_artifacts(assistant_message, message_index=int(assistant_message["id"]))

@@ -1,12 +1,17 @@
 from dataclasses import dataclass, field
-import difflib
 import math
-from typing import Any, Literal
 import re
+from typing import Any, Literal
 import unicodedata
 
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+from backend.agent.column_resolver import (
+    contains_normalized_column,
+    normalize_identifier,
+    resolve_column,
+)
 
 
 ROUTER_CONFIDENCE_THRESHOLD = 0.85
@@ -26,128 +31,310 @@ class RouterDecision:
         return self.route_type == "tool" and self.confidence >= ROUTER_CONFIDENCE_THRESHOLD
 
 
+@dataclass(frozen=True)
+class RouteCandidate:
+    intent: str
+    priority: int
+    score: float
+    decision: RouterDecision
+
+
 def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
     normalized = _normalize(question)
     if not normalized:
         return _fallback("Question is empty.")
+    return _route_with_candidates(dataframe, normalized)
 
-    if _has_any(normalized, ("bao nhieu dong", "bao nhiêu dòng", "row count", "number of rows", "so dong", "số dòng")):
-        return _tool("profile_dataset", {}, 0.96)
 
-    if _has_any(normalized, ("bao nhieu cot", "bao nhiêu cột", "number of columns", "so cot", "số cột")):
-        return _tool("profile_dataset", {}, 0.96)
+def _route_with_candidates(dataframe: pd.DataFrame, normalized: str) -> RouterDecision:
+    candidates = _build_route_candidates(dataframe, normalized)
+    if not candidates:
+        return _fallback("Router confidence is low; use LLM fallback.")
 
-    if _has_any(normalized, ("ty le", "tỷ lệ", "phan tram", "phần trăm", "percent", "percentage")):
-        column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
-        condition = _extract_numeric_condition(normalized)
-        if column is not None and condition is not None:
-            if _is_numeric_column(dataframe, column):
-                operator, value = condition
-                return _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.93)
-            return _clarify(f"Cột '{column}' không phải numeric. Hãy chọn một cột numeric để tính tỷ lệ.")
-        if column is not None and not _is_numeric_column(dataframe, column):
-            categorical_condition = _extract_categorical_percentage_condition(dataframe, column, normalized)
-            if categorical_condition is not None:
-                operator, value = categorical_condition
-                return _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.92)
+    candidates = _filter_compatible_candidates(candidates, normalized)
+    candidates = sorted(
+        candidates,
+        key=lambda candidate: (candidate.score, candidate.priority, candidate.decision.confidence),
+        reverse=True,
+    )
+    best = candidates[0]
+    if len(candidates) > 1 and _has_candidate_conflict(best, candidates[1]):
+        return _fallback("Router detected conflicting intents; use LLM fallback.")
+    return best.decision
 
-    if _has_any(normalized, ("nhung cot nao", "những cột nào", "danh sach cot", "danh sách cột", "list columns", "columns")):
-        return _tool("list_columns", {}, 0.95)
 
-    if _has_any(normalized, ("thieu du lieu", "thiếu dữ liệu", "missing", "null", "na values", "cot nao thieu", "cột nào thiếu")):
-        return _tool("detect_missing_values", {}, 0.95)
+def _build_route_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    candidates: list[RouteCandidate] = []
+    candidates.extend(_profile_candidates(normalized))
+    candidates.extend(_percentage_candidates(dataframe, normalized))
+    candidates.extend(_correlation_candidates(dataframe, normalized))
+    candidates.extend(_missing_candidates(normalized))
+    candidates.extend(_list_column_candidates(normalized))
+    candidates.extend(_distribution_candidates(dataframe, normalized))
+    candidates.extend(_describe_candidates(dataframe, normalized))
+    candidates.extend(_value_count_candidates(dataframe, normalized))
+    candidates.extend(_aggregate_candidates(dataframe, normalized))
+    candidates.extend(_chart_candidates(dataframe, normalized))
+    return candidates
 
-    if _has_any(normalized, ("phan phoi", "phân phối", "distribution", "histogram")):
-        column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
-        if column is not None:
-            if _is_numeric_column(dataframe, column):
-                return _tool(
-                    "generate_chart_spec",
-                    {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
-                    0.93,
+
+def _candidate(intent: str, priority: int, decision: RouterDecision, evidence: float = 1.0) -> RouteCandidate:
+    score = priority + (decision.confidence * 10) + evidence
+    return RouteCandidate(intent=intent, priority=priority, score=score, decision=decision)
+
+
+def _profile_candidates(normalized: str) -> list[RouteCandidate]:
+    if _has_any(normalized, ("bao nhieu dong", "row count", "number of rows", "so dong")):
+        return [_candidate("profile", 100, _tool("profile_dataset", {}, 0.96), evidence=2.0)]
+    if _has_any(normalized, ("bao nhieu cot", "number of columns", "so cot")):
+        return [_candidate("profile", 100, _tool("profile_dataset", {}, 0.96), evidence=2.0)]
+    return []
+
+
+def _percentage_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_any(normalized, ("ty le", "phan tram", "percent", "percentage")):
+        return []
+
+    column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
+    if column is None:
+        return []
+
+    condition = _extract_numeric_condition(normalized)
+    if condition is not None:
+        if _is_numeric_column(dataframe, column):
+            operator, value = condition
+            return [
+                _candidate(
+                    "percentage",
+                    95,
+                    _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.93),
+                    evidence=3.0,
                 )
-            return _clarify(f"Cột '{column}' không phải numeric. Hãy chọn một cột numeric để vẽ phân phối.")
-        return _clarify("Bạn muốn xem phân phối của cột numeric nào?")
-
-    if _has_any(normalized, ("mo ta", "mô tả", "describe", "summary", "thong ke", "thống kê")):
-        column = _find_column(dataframe, normalized)
-        if column is not None:
-            if _is_numeric_column(dataframe, column):
-                return _tool("describe_numeric", {"column": column}, 0.93)
-            return _clarify(f"Cột '{column}' không phải numeric. Hãy chọn một cột numeric để mô tả.")
-        if _has_any(normalized, ("numeric", "so", "số", "number")):
-            return _tool("describe_numeric", {}, 0.9)
-
-    if _has_any(normalized, ("top", "value counts", "dem", "đếm", "pho bien", "phổ biến", "tan suat", "tần suất")):
-        column = _find_column(dataframe, normalized)
-        if column is not None:
-            return _tool("value_counts", {"column": column, "top_n": _extract_top_n(normalized)}, 0.91)
-
-    aggregate_operation = _detect_aggregation(normalized)
-    if aggregate_operation is not None:
-        metric_column = _find_metric_column(dataframe, normalized)
-        has_group_intent = _has_group_intent(normalized)
-        group_column = (
-            _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
-            if has_group_intent
-            else None
-        )
-        if metric_column and group_column:
-            return _tool(
-                "aggregate_metric",
-                {"metric_column": metric_column, "group_by": group_column, "operation": aggregate_operation},
-                0.9,
+            ]
+        return [
+            _candidate(
+                "percentage",
+                95,
+                _clarify(f"Cot '{column}' khong phai numeric. Hay chon mot cot numeric de tinh ty le."),
             )
-        if metric_column and not has_group_intent:
-            return _tool("describe_numeric", {"column": metric_column}, 0.91)
-        if has_group_intent:
-            return _clarify("Bạn muốn tính metric nào và nhóm theo cột nào?")
+        ]
 
-    if _has_any(
-        normalized,
-        (
-            "ve bieu do",
-            "vẽ biểu đồ",
-            "chart",
-            "plot",
-            "visualize",
-            "bieu do",
-            "biểu đồ",
-            "histogram",
-            "scatter",
-            "heatmap",
-            "boxplot",
-            "pie chart",
-            "phan phoi",
-            "phân phối",
+    if not _is_numeric_column(dataframe, column):
+        categorical_condition = _extract_categorical_percentage_condition(dataframe, column, normalized)
+        if categorical_condition is not None:
+            operator, value = categorical_condition
+            return [
+                _candidate(
+                    "percentage",
+                    95,
+                    _tool("conditional_percentage", {"column": column, "operator": operator, "value": value}, 0.92),
+                    evidence=3.0,
+                )
+            ]
+    return []
+
+
+def _correlation_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_correlation_intent(normalized) or _is_chart_request(normalized):
+        return []
+    columns = _find_correlation_columns(dataframe, normalized)
+    if len(columns) >= 2:
+        return [
+            _candidate(
+                "correlation",
+                100,
+                _tool("correlation_analysis", {"columns": columns}, 0.93),
+                evidence=min(4.0, float(len(columns))),
+            )
+        ]
+    return []
+
+
+def _missing_candidates(normalized: str) -> list[RouteCandidate]:
+    if _has_any(normalized, ("thieu du lieu", "missing", "null", "na values", "cot nao thieu")):
+        return [_candidate("missing", 90, _tool("detect_missing_values", {}, 0.95), evidence=2.0)]
+    return []
+
+
+def _list_column_candidates(normalized: str) -> list[RouteCandidate]:
+    if _has_any(normalized, ("nhung cot nao", "danh sach cot", "list columns", "columns")):
+        return [_candidate("list_columns", 50, _tool("list_columns", {}, 0.95))]
+    return []
+
+
+def _distribution_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_any(normalized, ("phan phoi", "distribution", "histogram")):
+        return []
+
+    column = _find_metric_column(dataframe, normalized) or _find_column(dataframe, normalized)
+    if column is None:
+        return [_candidate("distribution", 85, _clarify("Ban muon xem phan phoi cua cot numeric nao?"))]
+    if not _is_numeric_column(dataframe, column):
+        return [
+            _candidate(
+                "distribution",
+                85,
+                _clarify(f"Cot '{column}' khong phai numeric. Hay chon mot cot numeric de ve phan phoi."),
+            )
+        ]
+    return [
+        _candidate(
             "distribution",
-        ),
-    ):
-        chart_type = _detect_chart_type(normalized)
-        metric_column = _find_metric_column(dataframe, normalized)
-        group_column = _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
-
-        if chart_type == "histogram":
-            column = metric_column or _find_column(dataframe, normalized)
-            if column and _is_numeric_column(dataframe, column):
-                return _tool(
-                    "generate_chart_spec",
-                    {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
-                    0.9,
-                )
-
-        if chart_type == "correlation_heatmap":
-            return _tool("generate_chart_spec", {"chart_type": "correlation_heatmap"}, 0.88)
-
-        if metric_column and group_column:
-            return _tool(
+            85,
+            _tool(
                 "generate_chart_spec",
-                {"chart_type": chart_type, "x": group_column, "y": metric_column},
-                0.88,
-            )
-        return _clarify("Bạn muốn vẽ biểu đồ cho metric nào và theo cột nào?")
+                {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
+                0.93,
+            ),
+            evidence=3.0,
+        )
+    ]
 
-    return _fallback("Router confidence is low; use LLM fallback.")
+
+def _describe_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_any(normalized, ("mo ta", "describe", "summary", "thong ke")):
+        return []
+
+    column = _find_column(dataframe, normalized)
+    if column is not None:
+        if _is_numeric_column(dataframe, column):
+            return [_candidate("describe", 60, _tool("describe_numeric", {"column": column}, 0.93), evidence=2.0)]
+        return [
+            _candidate(
+                "describe",
+                60,
+                _clarify(f"Cot '{column}' khong phai numeric. Hay chon mot cot numeric de mo ta."),
+            )
+        ]
+    if _has_any(normalized, ("numeric", "so", "number")):
+        return [_candidate("describe", 60, _tool("describe_numeric", {}, 0.9))]
+    return []
+
+
+def _value_count_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_any(normalized, ("top", "value counts", "dem", "pho bien", "tan suat")):
+        return []
+    column = _find_column(dataframe, normalized)
+    if column is None:
+        return []
+    return [
+        _candidate(
+            "value_counts",
+            70,
+            _tool("value_counts", {"column": column, "top_n": _extract_top_n(normalized)}, 0.91),
+            evidence=2.0,
+        )
+    ]
+
+
+def _aggregate_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    operation = _detect_aggregation(normalized)
+    if operation is None:
+        return []
+
+    metric_column = _find_metric_column(dataframe, normalized)
+    has_group_intent = _has_group_intent(normalized)
+    group_column = (
+        _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
+        if has_group_intent
+        else None
+    )
+
+    if metric_column and group_column:
+        return [
+            _candidate(
+                "aggregate",
+                75,
+                _tool(
+                    "aggregate_metric",
+                    {"metric_column": metric_column, "group_by": group_column, "operation": operation},
+                    0.9,
+                ),
+                evidence=3.0,
+            )
+        ]
+    if metric_column and not has_group_intent:
+        return [
+            _candidate(
+                "aggregate",
+                75,
+                _tool("describe_numeric", {"column": metric_column}, 0.91),
+                evidence=2.0,
+            )
+        ]
+    if has_group_intent:
+        return [_candidate("aggregate", 75, _clarify("Ban muon tinh metric nao va nhom theo cot nao?"))]
+    return []
+
+
+def _chart_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    if not _has_chart_intent(normalized):
+        return []
+
+    chart_type = _detect_chart_type(normalized)
+    metric_column = _find_metric_column(dataframe, normalized)
+    group_column = _find_group_column(dataframe, normalized, exclude={metric_column} if metric_column else set())
+
+    if chart_type == "histogram":
+        column = metric_column or _find_column(dataframe, normalized)
+        if column and _is_numeric_column(dataframe, column):
+            return [
+                _candidate(
+                    "chart",
+                    80,
+                    _tool(
+                        "generate_chart_spec",
+                        {"chart_type": "histogram", "x": column, "bins": _histogram_bins(dataframe, column)},
+                        0.9,
+                    ),
+                    evidence=2.0,
+                )
+            ]
+
+    if chart_type == "correlation_heatmap":
+        return [
+            _candidate(
+                "chart",
+                80,
+                _tool("generate_chart_spec", {"chart_type": "correlation_heatmap"}, 0.88),
+                evidence=2.0,
+            )
+        ]
+
+    if metric_column and group_column:
+        return [
+            _candidate(
+                "chart",
+                80,
+                _tool("generate_chart_spec", {"chart_type": chart_type, "x": group_column, "y": metric_column}, 0.88),
+                evidence=2.0,
+            )
+        ]
+    return [_candidate("chart", 80, _clarify("Ban muon ve bieu do cho metric nao va theo cot nao?"))]
+
+
+def _filter_compatible_candidates(candidates: list[RouteCandidate], normalized: str) -> list[RouteCandidate]:
+    intents = {candidate.intent for candidate in candidates}
+    filtered = list(candidates)
+
+    if "correlation" in intents:
+        filtered = [candidate for candidate in filtered if candidate.intent != "list_columns"]
+        if _is_chart_request(normalized):
+            filtered = [candidate for candidate in filtered if candidate.intent != "correlation"]
+    if "missing" in intents:
+        filtered = [candidate for candidate in filtered if candidate.intent != "list_columns"]
+    if "distribution" in intents:
+        filtered = [candidate for candidate in filtered if candidate.intent not in {"chart", "describe"}]
+    if "percentage" in intents:
+        filtered = [candidate for candidate in filtered if candidate.intent not in {"aggregate", "describe"}]
+
+    return filtered or candidates
+
+
+def _has_candidate_conflict(best: RouteCandidate, second: RouteCandidate) -> bool:
+    if best.intent == second.intent:
+        return False
+    return best.score - second.score < 12
 
 
 def _tool(tool_name: str, arguments: dict[str, Any], confidence: float) -> RouterDecision:
@@ -163,37 +350,75 @@ def _clarify(message: str) -> RouterDecision:
 
 
 def _detect_aggregation(normalized: str) -> str | None:
-    if _has_any(normalized, ("trung binh", "trung bình", "average", "mean", "avg")):
+    if _has_any(normalized, ("trung binh", "average", "mean", "avg")):
         return "mean"
-    if _has_any(normalized, ("tong", "tổng", "sum", "total")):
+    if _has_any(normalized, ("tong", "sum", "total")):
         return "sum"
-    if _has_any(normalized, ("median", "trung vi", "trung vị")):
+    if _has_any(normalized, ("median", "trung vi")):
         return "median"
-    if _has_any(normalized, ("min", "nho nhat", "nhỏ nhất")):
+    if _has_any(normalized, ("min", "nho nhat")):
         return "min"
-    if _has_any(normalized, ("max", "lon nhat", "lớn nhất", "cao nhat", "cao nhất")):
+    if _has_any(normalized, ("max", "lon nhat", "cao nhat")):
         return "max"
     return None
 
 
 def _has_group_intent(normalized: str) -> bool:
-    return _has_any(normalized, ("theo nhom", "theo nhóm", "by group", "group by", "theo"))
+    return _has_any(normalized, ("theo nhom", "by group", "group by", "theo"))
+
+
+def _has_chart_intent(normalized: str) -> bool:
+    return _has_any(
+        normalized,
+        (
+            "ve bieu do",
+            "chart",
+            "plot",
+            "visualize",
+            "bieu do",
+            "histogram",
+            "scatter",
+            "heatmap",
+            "boxplot",
+            "pie chart",
+        ),
+    )
 
 
 def _detect_chart_type(normalized: str) -> str:
-    if _has_any(normalized, ("scatter", "phan tan", "phân tán")):
+    if _has_any(normalized, ("scatter", "phan tan")):
         return "scatter"
-    if _has_any(normalized, ("line", "duong", "đường")):
+    if _has_any(normalized, ("line", "duong")):
         return "line"
-    if _has_any(normalized, ("histogram", "phan phoi", "phân phối")):
+    if _has_any(normalized, ("histogram", "phan phoi")):
         return "histogram"
-    if _has_any(normalized, ("heatmap", "correlation", "tuong quan", "tương quan")):
+    if _has_any(normalized, ("heatmap", "correlation", "tuong quan")):
         return "correlation_heatmap"
     if _has_any(normalized, ("box", "boxplot")):
         return "box"
-    if _has_any(normalized, ("pie", "tron", "tròn")):
+    if _has_any(normalized, ("pie", "tron")):
         return "pie"
     return "bar"
+
+
+def _has_correlation_intent(normalized: str) -> bool:
+    return _has_any(normalized, ("tuong quan", "correlation", "lien quan", "related"))
+
+
+def _is_chart_request(normalized: str) -> bool:
+    return _has_any(
+        normalized,
+        (
+            "ve bieu do",
+            "chart",
+            "plot",
+            "visualize",
+            "bieu do",
+            "heatmap",
+            "scatter",
+            "boxplot",
+        ),
+    )
 
 
 def _histogram_bins(dataframe: pd.DataFrame, column: str) -> int:
@@ -231,6 +456,7 @@ def _extract_categorical_percentage_condition(
 ) -> tuple[str, str] | None:
     values = [str(value) for value in dataframe[column].dropna().astype(str).unique()]
     value_lookup = {_normalize(value): value for value in values}
+
     for normalized_value, original_value in value_lookup.items():
         if re.search(rf"(?<!\w){re.escape(normalized_value)}(?!\w)", normalized):
             return "eq", original_value
@@ -255,6 +481,9 @@ def _find_metric_column(dataframe: pd.DataFrame, normalized: str) -> str | None:
     for column in _matching_columns(dataframe, normalized):
         if _is_numeric_column(dataframe, column):
             return column
+    resolved = resolve_column(dataframe, normalized, expected_type="numeric")
+    if resolved is not None:
+        return resolved
     numeric_columns = [str(column) for column in dataframe.columns if _is_numeric_column(dataframe, str(column))]
     return numeric_columns[0] if len(numeric_columns) == 1 else None
 
@@ -269,6 +498,36 @@ def _find_group_column(dataframe: pd.DataFrame, normalized: str, exclude: set[st
     categorical_columns = [str(column) for column in dataframe.columns if not _is_numeric_column(dataframe, str(column))]
     candidates = [column for column in categorical_columns if column not in exclude]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _find_correlation_columns(dataframe: pd.DataFrame, normalized: str) -> list[str]:
+    columns = [column for column in _matching_columns(dataframe, normalized) if _is_numeric_column(dataframe, column)]
+    resolved = resolve_column(dataframe, normalized, expected_type="numeric")
+    if resolved is not None and resolved not in columns:
+        columns.append(resolved)
+
+    numeric_columns = [str(column) for column in dataframe.columns if _is_numeric_column(dataframe, str(column))]
+    if len(columns) >= 2:
+        return columns
+    if len(columns) == 1 and _asks_correlation_columns(normalized):
+        return columns + [column for column in numeric_columns if column not in columns]
+    if not columns and len(numeric_columns) == 2:
+        return numeric_columns
+    return columns
+
+
+def _asks_correlation_columns(normalized: str) -> bool:
+    return _has_any(
+        normalized,
+        (
+            "cot nao",
+            "nhung cot nao",
+            "cac cot con lai",
+            "cac cot numeric con lai",
+            "remaining columns",
+            "remaining numeric columns",
+        ),
+    )
 
 
 def _find_column(dataframe: pd.DataFrame, normalized: str) -> str | None:
@@ -286,8 +545,8 @@ def _matching_columns(dataframe: pd.DataFrame, normalized: str) -> list[str]:
     if matches:
         return matches
 
-    close_match = _find_close_column_name(normalized, [str(column) for column in dataframe.columns])
-    return [close_match] if close_match else []
+    resolved = resolve_column(dataframe, normalized)
+    return [resolved] if resolved else []
 
 
 def _extract_top_n(normalized: str) -> int:
@@ -308,37 +567,14 @@ def _has_any(text: str, phrases: tuple[str, ...]) -> bool:
 def _normalize(text: str) -> str:
     stripped = unicodedata.normalize("NFKD", text.lower())
     ascii_text = "".join(char for char in stripped if not unicodedata.combining(char))
-    ascii_text = ascii_text.replace("đ", "d")
-    ascii_text = ascii_text.replace("_", " ")
+    ascii_text = ascii_text.replace("\u0111", "d").replace("_", " ")
     ascii_text = re.sub(r"[^a-z0-9_]+", " ", ascii_text)
     return " ".join(ascii_text.strip().split())
 
 
 def _normalize_identifier(identifier: str) -> str:
-    return _normalize(identifier.replace("_", " "))
+    return normalize_identifier(identifier)
 
 
 def _contains_normalized_column(normalized_text: str, normalized_column: str) -> bool:
-    if re.search(rf"(?<!\w){re.escape(normalized_column)}(?!\w)", normalized_text):
-        return True
-    return normalized_column.replace(" ", "") in normalized_text.replace(" ", "")
-
-
-def _find_close_column_name(normalized_text: str, columns: list[str]) -> str | None:
-    lookup = {_normalize_identifier(column): column for column in columns}
-    tokens = normalized_text.split()
-    phrases = set()
-    for size in range(1, min(4, len(tokens)) + 1):
-        for start in range(0, len(tokens) - size + 1):
-            phrases.add(" ".join(tokens[start : start + size]))
-    phrases.add(normalized_text)
-
-    best_score = 0.0
-    best_column = None
-    for phrase in phrases:
-        for normalized_column, column in lookup.items():
-            score = difflib.SequenceMatcher(None, phrase.replace(" ", ""), normalized_column.replace(" ", "")).ratio()
-            if score > best_score:
-                best_score = score
-                best_column = column
-    return best_column if best_score >= 0.86 else None
+    return contains_normalized_column(normalized_text, normalized_column)

@@ -21,7 +21,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="MVP backend for a safe AI agent that analyzes tabular datasets.",
+    description="Safe AI data analyst agent backend for uploaded tabular datasets.",
 )
 
 

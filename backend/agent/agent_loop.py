@@ -4,8 +4,15 @@ import math
 import re
 import unicodedata
 
+import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
+from backend.agent.column_argument_repair import repair_tool_column_arguments
+from backend.agent.column_resolver import (
+    contains_normalized_column,
+    normalize_text,
+    resolve_column,
+)
 from backend.agent.gemini_runtime import LLMProvider, choose_tool_with_gemini
 from backend.agent.guardrails import check_guardrails
 from backend.agent.router import route_question
@@ -81,8 +88,9 @@ def run_agent_turn(
         response = ChatResponse(
             session_id=session.session_id,
             answer=(
-                "Cau hoi nay chua khop rule chac chan. Hay cau hinh GEMINI_API_KEY de agent hieu ngon ngu tu nhien hon, "
-                "hoac hoi ro hon ve cot/metric trong dataset."
+                "Mình chưa đủ tự tin để chọn công cụ phân tích cho câu hỏi này. "
+                "Bạn có thể hỏi rõ hơn bằng cách nêu tên cột/metric trong dataset, "
+                "hoặc cấu hình GEMINI_API_KEY để bật lớp hiểu ngôn ngữ tự nhiên nâng cao."
             ),
             response_type="error",
             tool_trace=traces
@@ -185,7 +193,11 @@ def _execute_validated_tool(
         )
     )
     if not validation.is_valid:
-        response = _clarification_response(session.session_id, f"Tool call chua hop le: {validation.message}", traces)
+        response = _clarification_response(
+            session.session_id,
+            _validation_clarification_message(tool_name, validation.message),
+            traces,
+        )
         _set_pending_from_tool_call(session, question, tool_name, arguments, response.answer)
         return response
 
@@ -204,7 +216,7 @@ def _execute_validated_tool(
         session_store.clear_pending_clarification(session.session_id)
         return ChatResponse(
             session_id=session.session_id,
-            answer=f"Khong the thuc thi tool '{tool_name}': {tool_result.message}",
+            answer=f"Mình chưa thể hoàn tất phân tích này: {tool_result.message}",
             response_type="error",
             tool_trace=traces,
         )
@@ -263,8 +275,16 @@ def _generate_answer(question: str, tool_result: ToolResult) -> str:
             f"{condition}, chiếm khoảng {_format_number(percent)}%."
         )
 
+    if tool_result.tool_name == "aggregate_metric":
+        answer = _aggregate_metric_answer(tool_result.table or [])
+        if answer:
+            return answer
+
     if tool_result.tool_name == "generate_chart_spec":
         chart_type = (tool_result.chart_spec or {}).get("chart_type", "chart")
+        if chart_type == "correlation_heatmap":
+            columns = (tool_result.chart_spec or {}).get("columns", [])
+            return f"Đã tạo heatmap tương quan cho {_format_number(len(columns))} cột numeric."
         if chart_type == "histogram":
             column = (tool_result.chart_spec or {}).get("x", "cột đã chọn")
             bins = (tool_result.chart_spec or {}).get("bins", 20)
@@ -286,6 +306,53 @@ def _response_type(tool_result: ToolResult) -> str:
     if tool_result.table is not None:
         return "table"
     return "answer"
+
+
+def _validation_clarification_message(tool_name: str, validation_message: str) -> str:
+    required_match = re.search(r"'([^']+)' is required", validation_message)
+    if required_match:
+        missing_field = required_match.group(1)
+        return (
+            f"Mình còn thiếu thông tin `{missing_field}` để chạy phân tích này. "
+            "Bạn hãy nêu rõ cột hoặc điều kiện cần dùng trong dataset."
+        )
+    if "does not exist" in validation_message:
+        return (
+            f"Mình chưa tìm thấy cột phù hợp trong dataset: {validation_message} "
+            "Bạn có thể kiểm tra lại tên cột hoặc dùng một tên gần với schema hiện có."
+        )
+    if "must be numeric" in validation_message:
+        return (
+            f"Cột được chọn chưa phù hợp cho phân tích numeric: {validation_message} "
+            "Bạn hãy chọn một cột số khác."
+        )
+    return f"Mình chưa thể chạy `{tool_name}` vì tham số chưa hợp lệ: {validation_message}"
+
+
+def _aggregate_metric_answer(table: list[dict[str, Any]]) -> str | None:
+    if not table:
+        return None
+    result_columns = [column for column in table[0] if column.startswith(("mean_", "sum_", "min_", "max_", "median_", "count_"))]
+    group_columns = [column for column in table[0] if column not in result_columns]
+    if len(result_columns) != 1 or len(group_columns) != 1:
+        return None
+
+    result_column = result_columns[0]
+    group_column = group_columns[0]
+    operation, metric_column = result_column.split("_", 1)
+    operation_label = {
+        "mean": "trung bình",
+        "sum": "tổng",
+        "min": "nhỏ nhất",
+        "max": "lớn nhất",
+        "median": "median",
+        "count": "số lượng",
+    }.get(operation, operation)
+    details = ", ".join(
+        f"{row.get(group_column)} = {_format_number(row.get(result_column))}"
+        for row in table[:5]
+    )
+    return f"{metric_column} {operation_label} theo {group_column}: {details}."
 
 
 def _clarification_response(session_id: str, message: str, traces: list[ToolTraceItem]) -> ChatResponse:
@@ -321,6 +388,11 @@ def _try_resolve_pending_clarification(
 ) -> ChatResponse | None:
     pending = session.pending_clarification
     if pending is None:
+        return None
+
+    direct_route = route_question(session.dataframe, question)
+    if direct_route.should_use_tool:
+        session_store.clear_pending_clarification(session.session_id)
         return None
 
     if _is_new_standalone_intent(question, str(pending.get("intent"))):
@@ -561,6 +633,10 @@ def _infer_metric_and_group(session: DatasetSession, text: str) -> tuple[str | N
                 metric_column = column
         elif group_by is None:
             group_by = column
+    if metric_column is None:
+        metric_column = resolve_column(session.dataframe, text, expected_type="numeric")
+    if group_by is None:
+        group_by = resolve_column(session.dataframe, text, expected_type="categorical")
     return metric_column, group_by
 
 
@@ -575,8 +651,8 @@ def _mentioned_columns(session: DatasetSession, text: str) -> list[str]:
     if matches:
         return matches
 
-    close_match = _find_close_column_name(text, [str(column) for column in session.dataframe.columns])
-    return [close_match] if close_match else []
+    resolved = resolve_column(session.dataframe, text)
+    return [resolved] if resolved else []
 
 
 def _is_numeric_dataset_column(session: DatasetSession, column: str) -> bool:
@@ -632,6 +708,19 @@ def _repair_tool_arguments(
     arguments: dict[str, Any],
     traces: list[ToolTraceItem],
 ) -> dict[str, Any]:
+    repaired_arguments = repair_tool_column_arguments(session.dataframe, tool_name, arguments)
+    if repaired_arguments != arguments:
+        traces.append(
+            ToolTraceItem(
+                source="agent_column_resolver",
+                tool_name=tool_name,
+                arguments=repaired_arguments,
+                status="success",
+                message="Đã chuẩn hóa tên cột trong tool arguments theo schema dataset.",
+            )
+        )
+        arguments = repaired_arguments
+
     if tool_name != "correlation_analysis":
         return arguments
 
@@ -758,7 +847,7 @@ def _find_mentioned_column(session: DatasetSession, phrase: str) -> str | None:
         normalized_column = _normalize_text(column_name.replace("_", " "))
         if _contains_normalized_column(normalized_phrase, normalized_column):
             return column_name
-    return None
+    return resolve_column(session.dataframe, phrase)
 
 
 def _find_close_numeric_column(session: DatasetSession, phrase: str) -> str | None:
@@ -767,6 +856,9 @@ def _find_close_numeric_column(session: DatasetSession, phrase: str) -> str | No
         for column in session.dataframe.columns
         if is_numeric_dtype(session.dataframe[str(column)]) and not is_bool_dtype(session.dataframe[str(column)])
     ]
+    resolved = resolve_column(session.dataframe, phrase, expected_type="numeric")
+    if resolved is not None:
+        return resolved
     return _find_close_column_name(phrase, numeric_columns)
 
 
@@ -789,6 +881,34 @@ def _correlation_answer(question: str, table: list[dict[str, Any]]) -> str | Non
     if not candidates:
         return None
 
+    normalized_question = _normalize_text(question)
+    if _asks_for_negative_correlation(normalized_question):
+        negative_candidates = sorted(
+            [(column, coefficient) for column, coefficient in candidates if coefficient < 0],
+            key=lambda item: item[1],
+        )
+        if not negative_candidates:
+            return f"Không có cột numeric nào có tương quan âm với '{target_column}' trong các cột đã kiểm tra."
+        details = ", ".join(f"{column} (r={coefficient:.3f})" for column, coefficient in negative_candidates)
+        return (
+            f"Các cột có tương quan âm với '{target_column}' là: {details}. "
+            "Lưu ý: tương quan không khẳng định quan hệ nhân quả."
+        )
+
+    if _asks_for_positive_correlation(normalized_question):
+        positive_candidates = sorted(
+            [(column, coefficient) for column, coefficient in candidates if coefficient > 0],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if not positive_candidates:
+            return f"Không có cột numeric nào có tương quan dương với '{target_column}' trong các cột đã kiểm tra."
+        details = ", ".join(f"{column} (r={coefficient:.3f})" for column, coefficient in positive_candidates)
+        return (
+            f"Các cột có tương quan dương với '{target_column}' là: {details}. "
+            "Lưu ý: tương quan không khẳng định quan hệ nhân quả."
+        )
+
     strongest_column, coefficient = max(candidates, key=lambda item: abs(item[1]))
     direction = "dương" if coefficient >= 0 else "âm"
     return (
@@ -796,6 +916,14 @@ def _correlation_answer(question: str, table: list[dict[str, Any]]) -> str | Non
         f"trong các cột numeric đã kiểm tra, với hệ số tương quan khoảng {coefficient:.3f}. "
         "Lưu ý: tương quan không khẳng định quan hệ nhân quả."
     )
+
+
+def _asks_for_negative_correlation(normalized_question: str) -> bool:
+    return any(token in normalized_question for token in ("tuong quan am", "correlation am", "negative correlation"))
+
+
+def _asks_for_positive_correlation(normalized_question: str) -> bool:
+    return any(token in normalized_question for token in ("tuong quan duong", "correlation duong", "positive correlation"))
 
 
 def _describe_numeric_answer(question: str, table: list[dict[str, Any]]) -> str | None:
@@ -831,14 +959,15 @@ def _find_target_in_correlation_table(question: str, table: list[dict[str, Any]]
 
     target_phrase = _extract_correlation_target_phrase(question)
     if target_phrase is not None:
+        resolved = _resolve_column_from_candidates(target_phrase, columns)
+        if resolved is not None:
+            return resolved
         return _find_close_column_name(target_phrase, columns)
     return None
 
 
 def _contains_normalized_column(normalized_text: str, normalized_column: str) -> bool:
-    if re.search(rf"(?<!\w){re.escape(normalized_column)}(?!\w)", normalized_text):
-        return True
-    return normalized_column.replace(" ", "") in normalized_text.replace(" ", "")
+    return contains_normalized_column(normalized_text, normalized_column)
 
 
 def _find_close_column_name(phrase: str, columns: list[str]) -> str | None:
@@ -850,12 +979,15 @@ def _find_close_column_name(phrase: str, columns: list[str]) -> str | None:
     return lookup[matches[0]]
 
 
+def _resolve_column_from_candidates(phrase: str, columns: list[str]) -> str | None:
+    if not columns:
+        return None
+    candidate_frame = pd.DataFrame({column: [0.0] for column in columns})
+    return resolve_column(candidate_frame, phrase, expected_type="numeric")
+
+
 def _normalize_text(text: str) -> str:
-    stripped = unicodedata.normalize("NFKD", text.lower())
-    ascii_text = "".join(char for char in stripped if not unicodedata.combining(char))
-    ascii_text = ascii_text.replace("đ", "d").replace("_", " ")
-    ascii_text = re.sub(r"[^a-z0-9]+", " ", ascii_text)
-    return " ".join(ascii_text.strip().split())
+    return normalize_text(text)
 
 
 def _format_number(value: Any) -> str:

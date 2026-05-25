@@ -37,6 +37,13 @@ def test_router_routes_missing_values() -> None:
     assert decision.tool_name == "detect_missing_values"
 
 
+def test_router_prioritizes_missing_over_list_columns_phrase() -> None:
+    decision = route_question(_sample_dataframe(), "Nhung cot nao thieu du lieu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "detect_missing_values"
+
+
 def test_router_routes_describe_numeric_column() -> None:
     decision = route_question(_sample_dataframe(), "Mô tả cột salary")
 
@@ -121,12 +128,138 @@ def test_router_uses_dynamic_histogram_bins_for_larger_distribution() -> None:
     assert decision.arguments == {"chart_type": "histogram", "x": "score", "bins": 10}
 
 
+def test_router_routes_pairwise_correlation_question() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Attendance": [70, 80, 90, 95],
+            "Exam_Score": [60, 70, 85, 90],
+            "Hours_Studied": [8, 12, 15, 20],
+        }
+    )
+
+    decision = route_question(dataframe, "Attendance co tuong quan voi Exam_Score khong?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "correlation_analysis"
+    assert decision.arguments == {"columns": ["Attendance", "Exam_Score"]}
+
+
+def test_router_prioritizes_correlation_question_over_list_columns() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Hours_Studied": [1, 2, 3, 4],
+            "Sleep_Hours": [9, 8, 7, 6],
+            "Exam_Score": [60, 70, 80, 90],
+        }
+    )
+
+    decision = route_question(dataframe, "Nhung cot nao co tuong quan am voi cot diem?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "correlation_analysis"
+    assert decision.arguments == {"columns": ["Exam_Score", "Hours_Studied", "Sleep_Hours"]}
+
+
+def test_router_keeps_correlation_heatmap_as_chart_request() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Attendance": [70, 80, 90, 95],
+            "Exam_Score": [60, 70, 85, 90],
+        }
+    )
+
+    decision = route_question(dataframe, "Ve heatmap tuong quan")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "generate_chart_spec"
+    assert decision.arguments == {"chart_type": "correlation_heatmap"}
+
+
+def test_router_falls_back_when_chart_and_aggregate_intents_conflict() -> None:
+    decision = route_question(_sample_dataframe(), "Ve bieu do salary trung binh theo department")
+
+    assert decision.route_type == "fallback"
+    assert decision.should_use_tool is False
+    assert "conflicting intents" in str(decision.message)
+
+
 def test_router_routes_numeric_percentage_condition() -> None:
     decision = route_question(_sample_dataframe(), "Tỷ lệ nhân viên có salary dưới 1000 là bao nhiêu?")
 
     assert decision.should_use_tool
     assert decision.tool_name == "conditional_percentage"
     assert decision.arguments == {"column": "salary", "operator": "lt", "value": 1000}
+
+
+def test_router_routes_score_alias_for_grouped_average() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Parental_Involvement": ["Low", "High", "High", "Medium"],
+            "Exam_Score": [60, 80, 90, 75],
+            "Hours_Studied": [10, 20, 25, 15],
+        }
+    )
+
+    decision = route_question(dataframe, "Điểm trung bình theo Parental_Involvement là bao nhiêu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "aggregate_metric"
+    assert decision.arguments == {
+        "metric_column": "Exam_Score",
+        "group_by": "Parental_Involvement",
+        "operation": "mean",
+    }
+
+
+def test_router_resolves_vietnamese_metric_tokens_for_non_student_schema() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Region": ["North", "South", "North", "West"],
+            "Monthly_Revenue": [1200, 900, 1500, 1000],
+            "Customer_Age": [22, 35, 41, 29],
+        }
+    )
+
+    decision = route_question(dataframe, "Doanh thu hang thang trung binh theo Region la bao nhieu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "aggregate_metric"
+    assert decision.arguments == {
+        "metric_column": "Monthly_Revenue",
+        "group_by": "Region",
+        "operation": "mean",
+    }
+
+
+def test_router_resolves_vietnamese_single_metric_when_multiple_numeric_columns_exist() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Customer_Age": [22, 35, 41, 29],
+            "Monthly_Revenue": [1200, 900, 1500, 1000],
+            "Order_Count": [3, 1, 4, 2],
+        }
+    )
+
+    decision = route_question(dataframe, "Do tuoi khach hang trung binh la bao nhieu?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "describe_numeric"
+    assert decision.arguments == {"column": "Customer_Age"}
+
+
+def test_router_resolves_vietnamese_distribution_column_for_generic_schema() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Sleep_Duration": [5.5, 6.0, 7.5, 8.0, 6.5],
+            "Screen_Time": [2, 5, 4, 6, 3],
+        }
+    )
+
+    decision = route_question(dataframe, "Phan phoi giac ngu the nao?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "generate_chart_spec"
+    assert decision.arguments == {"chart_type": "histogram", "x": "Sleep_Duration", "bins": 5}
 
 
 def test_router_routes_binary_category_percentage_condition() -> None:
