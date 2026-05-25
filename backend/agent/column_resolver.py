@@ -61,9 +61,13 @@ TOKEN_TRANSLATIONS: dict[str, tuple[str, ...]] = {
     "revenue": ("doanh thu",),
     "score": ("diem", "diem so", "ket qua"),
     "sleep": ("ngu", "giac ngu"),
+    "school": ("truong", "nha truong"),
     "studied": ("hoc", "da hoc"),
     "study": ("hoc", "hoc tap"),
     "sessions": ("buoi", "so buoi", "phien"),
+    "teacher": ("giao vien", "giang vien"),
+    "type": ("loai", "kieu"),
+    "quality": ("chat luong",),
     "tutoring": ("phu dao", "day kem", "hoc them"),
 }
 

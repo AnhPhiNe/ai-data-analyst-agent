@@ -1,0 +1,11 @@
+services:
+  ai-data-analyst-agent:
+    build: .
+    ports:
+      - "8000:8000"
+      - "8501:8501"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BACKEND_URL: http://localhost:8000

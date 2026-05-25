@@ -26,7 +26,13 @@ def validate_upload(filename: str, content: bytes, max_upload_mb: int) -> None:
         raise DatasetLoadError(f"File is too large. Maximum upload size is {max_upload_mb} MB.")
 
 
-def load_dataframe(filename: str, content: bytes, max_upload_mb: int) -> pd.DataFrame:
+def load_dataframe(
+    filename: str,
+    content: bytes,
+    max_upload_mb: int,
+    max_rows: int | None = None,
+    max_columns: int | None = None,
+) -> pd.DataFrame:
     validate_upload(filename=filename, content=content, max_upload_mb=max_upload_mb)
 
     suffix = Path(filename).suffix.lower()
@@ -46,6 +52,10 @@ def load_dataframe(filename: str, content: bytes, max_upload_mb: int) -> pd.Data
         raise DatasetLoadError("Uploaded dataset is empty.")
     if len(dataframe.columns) == 0:
         raise DatasetLoadError("Uploaded dataset has no columns.")
+    if max_rows is not None and len(dataframe) > max_rows:
+        raise DatasetLoadError(f"Uploaded dataset has too many rows. Maximum is {max_rows}.")
+    if max_columns is not None and len(dataframe.columns) > max_columns:
+        raise DatasetLoadError(f"Uploaded dataset has too many columns. Maximum is {max_columns}.")
 
     dataframe.columns = [str(column).strip() for column in dataframe.columns]
     if any(not column for column in dataframe.columns):

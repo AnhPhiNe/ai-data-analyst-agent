@@ -84,9 +84,9 @@ def _candidate(intent: str, priority: int, decision: RouterDecision, evidence: f
 
 
 def _profile_candidates(normalized: str) -> list[RouteCandidate]:
-    if _has_any(normalized, ("bao nhieu dong", "row count", "number of rows", "so dong")):
+    if _has_any(normalized, ("bao nhieu dong", "row count", "number of rows", "how many rows", "so dong")):
         return [_candidate("profile", 100, _tool("profile_dataset", {}, 0.96), evidence=2.0)]
-    if _has_any(normalized, ("bao nhieu cot", "number of columns", "so cot")):
+    if _has_any(normalized, ("bao nhieu cot", "number of columns", "how many columns", "so cot")):
         return [_candidate("profile", 100, _tool("profile_dataset", {}, 0.96), evidence=2.0)]
     return []
 
@@ -301,6 +301,18 @@ def _chart_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCan
             )
         ]
 
+    if chart_type == "scatter":
+        numeric_columns = [column for column in _matching_columns(dataframe, normalized) if _is_numeric_column(dataframe, column)]
+        if len(numeric_columns) >= 2:
+            return [
+                _candidate(
+                    "chart",
+                    80,
+                    _tool("generate_chart_spec", {"chart_type": "scatter", "x": numeric_columns[0], "y": numeric_columns[1]}, 0.9),
+                    evidence=3.0,
+                )
+            ]
+
     if metric_column and group_column:
         return [
             _candidate(
@@ -364,7 +376,7 @@ def _detect_aggregation(normalized: str) -> str | None:
 
 
 def _has_group_intent(normalized: str) -> bool:
-    return _has_any(normalized, ("theo nhom", "by group", "group by", "theo"))
+    return _has_any(normalized, ("theo nhom", "by group", "group by", "theo", "nhom")) or " by " in f" {normalized} "
 
 
 def _has_chart_intent(normalized: str) -> bool:
@@ -505,6 +517,10 @@ def _find_correlation_columns(dataframe: pd.DataFrame, normalized: str) -> list[
     resolved = resolve_column(dataframe, normalized, expected_type="numeric")
     if resolved is not None and resolved not in columns:
         columns.append(resolved)
+    for phrase in _correlation_column_phrases(normalized):
+        resolved_phrase = resolve_column(dataframe, phrase, expected_type="numeric")
+        if resolved_phrase is not None and resolved_phrase not in columns:
+            columns.append(resolved_phrase)
 
     numeric_columns = [str(column) for column in dataframe.columns if _is_numeric_column(dataframe, str(column))]
     if len(columns) >= 2:
@@ -522,12 +538,22 @@ def _asks_correlation_columns(normalized: str) -> bool:
         (
             "cot nao",
             "nhung cot nao",
+            "yeu to nao",
+            "yeu to numeric nao",
             "cac cot con lai",
             "cac cot numeric con lai",
             "remaining columns",
             "remaining numeric columns",
         ),
     )
+
+
+def _correlation_column_phrases(normalized: str) -> list[str]:
+    phrases = [normalized]
+    for marker in (" voi ", " with ", " va ", " and "):
+        if marker in f" {normalized} ":
+            phrases.extend(part.strip() for part in f" {normalized} ".split(marker) if part.strip())
+    return phrases
 
 
 def _find_column(dataframe: pd.DataFrame, normalized: str) -> str | None:

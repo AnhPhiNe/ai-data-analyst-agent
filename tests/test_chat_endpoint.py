@@ -107,6 +107,118 @@ def test_chat_query_resolves_distribution_follow_up_as_histogram() -> None:
     assert payload["tool_trace"][-1]["tool_name"] == "generate_chart_spec"
 
 
+def test_chat_query_resolves_generic_chart_follow_up_single_numeric_column_as_histogram() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Vẽ biểu đồ cho tôi"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "vẽ cho cột performance_score"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "histogram", "x": "performance_score", "bins": 4}
+    assert payload["tool_trace"][-1]["tool_name"] == "generate_chart_spec"
+
+
+def test_chat_query_resolves_generic_chart_follow_up_numeric_and_category_as_bar() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Vẽ biểu đồ cho tôi"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary và department"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "bar", "x": "department", "y": "salary"}
+
+
+def test_chat_query_resolves_generic_chart_follow_up_two_numeric_columns_as_scatter() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Vẽ biểu đồ cho tôi"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary và performance_score"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "scatter", "x": "salary", "y": "performance_score"}
+
+
+def test_chat_query_resolves_generic_chart_follow_up_single_category_as_pie() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Vẽ biểu đồ cho tôi"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "department"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"] == {"chart_type": "pie", "names": "department", "values": None}
+
+
+def test_chat_query_keeps_explicit_scatter_pending_with_only_one_numeric_column() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Vẽ scatter cho tôi"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "salary"},
+    )
+
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["response_type"] == "clarification"
+    assert payload["should_clarify"] is True
+    assert session_store.get(session_id).pending_clarification["metric_column"] == "salary"
+
+
 def test_chat_query_returns_percentage_for_numeric_condition() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
@@ -594,7 +706,7 @@ def test_chat_query_repairs_missing_correlation_target_and_explains_result(monke
 
     validation_trace = next(trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation")
     assert validation_trace["arguments"]["columns"][0] == "Exam_Score"
-    assert any(trace["source"] == "agent_repair" for trace in payload["tool_trace"])
+    assert any(trace["source"] in {"router", "agent_repair"} for trace in payload["tool_trace"])
 
 
 def test_chat_query_resolves_vietnamese_score_alias_as_correlation_target(

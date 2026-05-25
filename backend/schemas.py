@@ -3,6 +3,8 @@ from pydantic import BaseModel
 
 class DatasetUploadResponse(BaseModel):
     session_id: str
+    session_token: str | None = None
+    expires_at: str | None = None
     filename: str
     rows: int
     columns: int
@@ -88,6 +90,7 @@ class ChatResponse(BaseModel):
     table: list[dict[str, object]] | None = None
     chart_spec: dict[str, object] | None = None
     tool_trace: list[ToolTraceItem]
+    clarification_options: list[str] | None = None
     should_clarify: bool = False
     is_blocked: bool = False
 
@@ -97,3 +100,15 @@ class SuggestedContentResponse(BaseModel):
     questions: list[str]
     insights: list[str]
     source: str
+
+
+class AutoAnalysisResponse(BaseModel):
+    session_id: str
+    workflow_steps: list[str | None]
+    overview: dict[str, object]
+    data_quality: dict[str, object]
+    numeric_highlights: list[dict[str, object]]
+    categorical_highlights: list[dict[str, object]]
+    correlation_highlights: list[dict[str, object]]
+    recommended_charts: list[dict[str, object]]
+    next_questions: list[str]

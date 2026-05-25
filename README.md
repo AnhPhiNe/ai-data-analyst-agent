@@ -8,6 +8,7 @@ The app combines a FastAPI backend, Streamlit UI, pandas-based analysis tools, P
 
 - Upload CSV or XLSX datasets.
 - Profile a dataset with schema, missing values, numeric summaries, top categories, and distributions.
+- Run a deterministic automated analysis workflow with data-quality checks, highlights, correlations, recommended charts, and next questions.
 - Ask natural-language questions about the uploaded data.
 - Route clear requests to safe deterministic pandas tools.
 - Fall back to Gemini for lower-confidence or ambiguous requests when `GEMINI_API_KEY` is configured.
@@ -16,6 +17,8 @@ The app combines a FastAPI backend, Streamlit UI, pandas-based analysis tools, P
 - Provide suggested questions and grounded analytical insights from profiling signals.
 - Use guardrails to block unsafe or out-of-scope requests.
 - Keep a tool trace for debugging and AI engineering review.
+- Bound local demo sessions with TTL, max-session eviction, upload row/column limits, and optional session-token ownership.
+- Cache profile and suggested-content results per uploaded session.
 
 ## Architecture
 
@@ -27,7 +30,9 @@ Streamlit UI
 FastAPI Backend
     |
     +-- Dataset loader and in-memory session store
+    +-- Session lifecycle limits and per-session cache
     +-- Profiling service
+    +-- Automated analysis workflow
     +-- Suggested questions and deterministic insights
     +-- Guardrails
     +-- Hybrid candidate-scoring router
@@ -99,7 +104,7 @@ Gemini can help diversify questions, but insights remain deterministic to reduce
 
 ```text
 backend/
-  agent/          guardrails, router, Gemini runtime, agent loop, column repair
+  agent/          orchestrator, response composer, clarification memory, router, guardrails
   services/       upload/session/profiling services
   tools/          safe pandas tool registry
   visualization/ chart spec validation
@@ -164,7 +169,20 @@ Open the Streamlit URL, upload a CSV/XLSX file, and ask questions about the data
 | `GEMINI_API_KEY` | empty | Optional Gemini API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Gemini model name |
 | `MAX_UPLOAD_MB` | `10` | Maximum upload size |
+| `MAX_ROWS` | `100000` | Maximum rows accepted after parsing |
+| `MAX_COLUMNS` | `200` | Maximum columns accepted after parsing |
+| `MAX_SESSIONS` | `25` | Maximum in-memory sessions before LRU-style eviction |
+| `SESSION_TTL_SECONDS` | `3600` | Sliding TTL for in-memory sessions |
+| `REQUIRE_SESSION_TOKEN` | `false` | Require `X-Session-Token` ownership checks for session endpoints |
 | `BACKEND_URL` | `http://localhost:8000` | Frontend backend URL |
+
+## Run With Docker
+
+```bash
+docker compose up --build
+```
+
+Then open Streamlit at `http://localhost:8501`.
 
 ## Run Tests
 
@@ -178,9 +196,18 @@ Current local status:
 140 passed
 ```
 
+Run the lightweight router eval:
+
+```bash
+python scripts/evaluate_router.py
+```
+
+The eval set lives in `docs/route_eval_set.jsonl`, and the interpretation notes are in `docs/ROUTE_ACCURACY_REPORT.md`.
+
 ## Example Questions
 
 - `Dataset co bao nhieu dong?`
+- `Run automated analysis from the dashboard after upload`
 - `Cot nao thieu du lieu nhieu nhat?`
 - `Diem trung binh theo Parental_Involvement la bao nhieu?`
 - `Phan phoi cua Attendance the nao?`
@@ -191,10 +218,13 @@ Current local status:
 ## Current Limitations
 
 - Sessions are stored in memory, so uploaded datasets are lost when the backend restarts.
-- The app is built for single-user local demos, not production multi-tenant workloads.
+- The app is built for local/portfolio demos, not production multi-tenant workloads.
+- `REQUIRE_SESSION_TOKEN=true` adds lightweight session ownership, but it is not a substitute for real auth.
 - There is no database, vector store, RAG pipeline, or autonomous background analysis.
 - Gemini is optional and only used for fallback tool selection/question generation.
 - The app analyzes uploaded tabular data only; it does not browse the web or access external data sources.
+
+See `docs/PRODUCTION_ROADMAP.md` for the production-grade direction.
 
 ## Suggested CV Bullet
 

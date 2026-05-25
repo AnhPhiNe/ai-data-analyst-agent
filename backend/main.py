@@ -1,22 +1,30 @@
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+import logging
+
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile, status
 
 from backend.agent.agent_loop import run_agent_turn
 from backend.agent.gemini_runtime import GeminiProvider, LLMProvider
 from backend.agent.suggestions import generate_suggested_content
 from backend.core.config import get_settings
+from backend.core.logging import configure_logging, log_event
 from backend.schemas import (
+    AutoAnalysisResponse,
     ChatRequest,
     ChatResponse,
     DatasetProfileResponse,
     DatasetUploadResponse,
     SuggestedContentResponse,
 )
+from backend.services.auto_analysis import generate_auto_analysis
 from backend.services.dataset_loader import DatasetLoadError, load_dataframe
 from backend.services.profiling import dataframe_preview, profile_dataset
-from backend.services.session_store import session_store
+from backend.services.session_store import DatasetSession, session_store
 
 
 settings = get_settings()
+configure_logging()
+logger = logging.getLogger("backend.main")
+session_store.configure(ttl_seconds=settings.session_ttl_seconds, max_sessions=settings.max_sessions)
 
 app = FastAPI(
     title=settings.app_name,
@@ -43,14 +51,27 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetUploadResponse:
             filename=file.filename or "",
             content=content,
             max_upload_mb=settings.max_upload_mb,
+            max_rows=settings.max_rows,
+            max_columns=settings.max_columns,
         )
     except DatasetLoadError as exc:
+        log_event(logger, "dataset_upload_rejected", filename=file.filename, reason=str(exc))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     session = session_store.create(filename=file.filename or "uploaded_dataset", dataframe=dataframe)
+    log_event(
+        logger,
+        "dataset_uploaded",
+        session_id=session.session_id,
+        filename=session.filename,
+        rows=int(dataframe.shape[0]),
+        columns=int(dataframe.shape[1]),
+    )
 
     return DatasetUploadResponse(
         session_id=session.session_id,
+        session_token=session.access_token,
+        expires_at=session.expires_at.isoformat(),
         filename=session.filename,
         rows=int(dataframe.shape[0]),
         columns=int(dataframe.shape[1]),
@@ -60,12 +81,18 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetUploadResponse:
 
 
 @app.get("/datasets/{session_id}/profile", response_model=DatasetProfileResponse)
-def get_dataset_profile(session_id: str) -> DatasetProfileResponse:
-    session = session_store.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+def get_dataset_profile(
+    session_id: str,
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+) -> DatasetProfileResponse:
+    session = _get_session_or_404(session_id, x_session_token)
 
-    profile = profile_dataset(session.dataframe)
+    if session.profile_cache is None:
+        session.profile_cache = profile_dataset(session.dataframe)
+        log_event(logger, "dataset_profile_computed", session_id=session.session_id)
+    else:
+        log_event(logger, "dataset_profile_cache_hit", session_id=session.session_id)
+    profile = session.profile_cache
     return DatasetProfileResponse(
         session_id=session.session_id,
         filename=session.filename,
@@ -74,18 +101,43 @@ def get_dataset_profile(session_id: str) -> DatasetProfileResponse:
 
 
 @app.get("/datasets/{session_id}/suggestions", response_model=SuggestedContentResponse)
-def get_dataset_suggestions(session_id: str) -> SuggestedContentResponse:
-    session = session_store.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+def get_dataset_suggestions(
+    session_id: str,
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+) -> SuggestedContentResponse:
+    session = _get_session_or_404(session_id, x_session_token)
 
-    suggested = generate_suggested_content(session.dataframe, provider=get_llm_provider())
+    if session.suggestions_cache is None:
+        suggested = generate_suggested_content(session.dataframe, provider=get_llm_provider())
+        session.suggestions_cache = suggested
+        log_event(logger, "dataset_suggestions_computed", session_id=session.session_id, source=suggested.source)
+    else:
+        suggested = session.suggestions_cache
+        log_event(logger, "dataset_suggestions_cache_hit", session_id=session.session_id, source=suggested.source)
     return SuggestedContentResponse(
         session_id=session.session_id,
         questions=suggested.questions,
         insights=suggested.insights,
         source=suggested.source,
     )
+
+
+@app.get("/datasets/{session_id}/auto-analysis", response_model=AutoAnalysisResponse)
+def get_dataset_auto_analysis(
+    session_id: str,
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+) -> AutoAnalysisResponse:
+    session = _get_session_or_404(session_id, x_session_token)
+    if session.profile_cache is None:
+        session.profile_cache = profile_dataset(session.dataframe)
+    analysis = generate_auto_analysis(session.dataframe, profile=session.profile_cache)
+    log_event(
+        logger,
+        "dataset_auto_analysis_completed",
+        session_id=session.session_id,
+        recommended_charts=len(analysis["recommended_charts"]),
+    )
+    return AutoAnalysisResponse(session_id=session.session_id, **analysis)
 
 
 def get_llm_provider() -> LLMProvider | None:
@@ -95,13 +147,34 @@ def get_llm_provider() -> LLMProvider | None:
 
 
 @app.post("/chat/query", response_model=ChatResponse)
-def chat_query(request: ChatRequest) -> ChatResponse:
-    session = session_store.get(request.session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
-
-    return run_agent_turn(
+def chat_query(
+    request: ChatRequest,
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+) -> ChatResponse:
+    session = _get_session_or_404(request.session_id, x_session_token)
+    response = run_agent_turn(
         session=session,
         question=request.question,
         provider=get_llm_provider(),
     )
+    last_trace = response.tool_trace[-1] if response.tool_trace else None
+    log_event(
+        logger,
+        "chat_turn_completed",
+        session_id=session.session_id,
+        response_type=response.response_type,
+        final_source=last_trace.source if last_trace else None,
+        final_tool=last_trace.tool_name if last_trace else None,
+        is_blocked=response.is_blocked,
+        should_clarify=response.should_clarify,
+    )
+    return response
+
+
+def _get_session_or_404(session_id: str, session_token: str | None = None) -> DatasetSession:
+    session = session_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset session not found.")
+    if not session_store.verify_access(session, session_token, required=settings.require_session_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid session token.")
+    return session

@@ -1,0 +1,60 @@
+{"id":"vi_rows_001","question":"Dataset có bao nhiêu dòng?","expected_route":"tool","expected_tool":"profile_dataset"}
+{"id":"vi_cols_002","question":"Dữ liệu này có bao nhiêu cột?","expected_route":"tool","expected_tool":"profile_dataset"}
+{"id":"en_rows_003","question":"How many rows are in this dataset?","expected_route":"tool","expected_tool":"profile_dataset"}
+{"id":"en_cols_004","question":"What is the number of columns?","expected_route":"tool","expected_tool":"profile_dataset"}
+{"id":"vi_list_005","question":"Danh sách cột gồm những gì?","expected_route":"tool","expected_tool":"list_columns"}
+{"id":"en_list_006","question":"List columns in the dataset","expected_route":"tool","expected_tool":"list_columns"}
+{"id":"vi_missing_007","question":"Có cột nào thiếu dữ liệu không?","expected_route":"tool","expected_tool":"detect_missing_values"}
+{"id":"en_missing_008","question":"Which columns have missing values?","expected_route":"tool","expected_tool":"detect_missing_values"}
+{"id":"vi_missing_009","question":"Cột nào bị null nhiều nhất?","expected_route":"tool","expected_tool":"detect_missing_values"}
+{"id":"vi_describe_010","question":"Mô tả thống kê của Exam_Score","expected_route":"tool","expected_tool":"describe_numeric"}
+{"id":"en_describe_011","question":"Describe Hours_Studied","expected_route":"tool","expected_tool":"describe_numeric"}
+{"id":"vi_mean_012","question":"Điểm trung bình là bao nhiêu?","expected_route":"tool","expected_tool":"describe_numeric"}
+{"id":"en_mean_013","question":"What is the average Attendance?","expected_route":"tool","expected_tool":"describe_numeric"}
+{"id":"vi_minmax_014","question":"Thống kê min max của Sleep_Hours","expected_route":"tool","expected_tool":"describe_numeric"}
+{"id":"vi_top_015","question":"Top giá trị trong Parental_Involvement là gì?","expected_route":"tool","expected_tool":"value_counts"}
+{"id":"en_top_016","question":"Top categories for School_Type","expected_route":"tool","expected_tool":"value_counts"}
+{"id":"vi_count_017","question":"Đếm tần suất của Gender","expected_route":"tool","expected_tool":"value_counts"}
+{"id":"en_counts_018","question":"value counts for Internet_Access","expected_route":"tool","expected_tool":"value_counts"}
+{"id":"vi_agg_019","question":"Trung bình Exam_Score theo Gender là bao nhiêu?","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"en_agg_020","question":"Average Exam_Score by School_Type","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"vi_agg_021","question":"Tổng Tutoring_Sessions theo Gender","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"en_agg_022","question":"Median Previous_Scores by Internet_Access","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"vi_agg_023","question":"Nhóm Teacher_Quality nào có Exam_Score trung bình cao nhất?","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"vi_agg_024","question":"Điểm trung bình theo Parental_Involvement","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"vi_dist_025","question":"Phân phối của Attendance trông như thế nào?","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"en_dist_026","question":"Show distribution of Hours_Studied","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_hist_027","question":"Vẽ histogram cho Exam_Score","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"en_hist_028","question":"Histogram of Previous_Scores","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_chart_029","question":"Vẽ biểu đồ Exam_Score theo Gender","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"en_chart_030","question":"Create a bar chart of Exam_Score by School_Type","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_scatter_031","question":"Vẽ scatter giữa Hours_Studied và Exam_Score","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"en_scatter_032","question":"Scatter plot Attendance vs Exam_Score","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_heatmap_033","question":"Vẽ heatmap tương quan","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"en_heatmap_034","question":"Show correlation heatmap","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_corr_035","question":"Hours_Studied có tương quan với Exam_Score không?","expected_route":"tool","expected_tool":"correlation_analysis"}
+{"id":"en_corr_036","question":"Correlation between Attendance and Exam_Score","expected_route":"tool","expected_tool":"correlation_analysis"}
+{"id":"vi_corr_037","question":"Những cột nào tương quan với cột điểm?","expected_route":"tool","expected_tool":"correlation_analysis"}
+{"id":"vi_corr_038","question":"Yếu tố numeric nào liên quan mạnh nhất với Exam_Score?","expected_route":"tool","expected_tool":"correlation_analysis"}
+{"id":"vi_percent_039","question":"Tỷ lệ học sinh có Attendance dưới 75 là bao nhiêu?","expected_route":"tool","expected_tool":"conditional_percentage"}
+{"id":"en_percent_040","question":"What percent of students have Hours_Studied above 20?","expected_route":"tool","expected_tool":"conditional_percentage"}
+{"id":"vi_percent_041","question":"Tỷ lệ học sinh tham gia Extracurricular_Activities là bao nhiêu?","expected_route":"tool","expected_tool":"conditional_percentage"}
+{"id":"vi_percent_042","question":"Phần trăm học sinh không có Internet_Access là bao nhiêu?","expected_route":"tool","expected_tool":"conditional_percentage"}
+{"id":"vi_clarify_043","question":"Tính trung bình theo nhóm","expected_route":"clarify","expected_tool":null}
+{"id":"en_clarify_044","question":"Average by group","expected_route":"clarify","expected_tool":null}
+{"id":"vi_clarify_045","question":"Vẽ biểu đồ cho tôi","expected_route":"clarify","expected_tool":null}
+{"id":"vi_clarify_046","question":"Phân phối thế nào?","expected_route":"clarify","expected_tool":null}
+{"id":"en_clarify_047","question":"Make a chart","expected_route":"clarify","expected_tool":null}
+{"id":"vi_fallback_048","question":"Có insight thú vị gì không?","expected_route":"fallback","expected_tool":null}
+{"id":"en_fallback_049","question":"Anything interesting here?","expected_route":"fallback","expected_tool":null}
+{"id":"vi_fallback_050","question":"Hãy phân tích tổng quan như một chuyên gia giáo dục","expected_route":"fallback","expected_tool":null}
+{"id":"vi_oos_051","question":"Giá vàng hôm nay thế nào?","expected_route":"fallback","expected_tool":null}
+{"id":"en_oos_052","question":"Can you search Google for education benchmarks?","expected_route":"fallback","expected_tool":null}
+{"id":"vi_conflict_053","question":"Vẽ biểu đồ Exam_Score trung bình theo Gender","expected_route":"fallback","expected_tool":null}
+{"id":"en_conflict_054","question":"Plot average Exam_Score by School_Type","expected_route":"fallback","expected_tool":null}
+{"id":"vi_alias_055","question":"Điểm có liên quan với số giờ học không?","expected_route":"tool","expected_tool":"correlation_analysis"}
+{"id":"vi_alias_056","question":"Điểm trung bình theo chất lượng giáo viên","expected_route":"tool","expected_tool":"aggregate_metric"}
+{"id":"vi_alias_057","question":"Phân phối của số giờ ngủ","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_alias_058","question":"Top loại trường phổ biến nhất","expected_route":"tool","expected_tool":"value_counts"}
+{"id":"en_box_059","question":"Box plot Exam_Score by Gender","expected_route":"tool","expected_tool":"generate_chart_spec"}
+{"id":"vi_pie_060","question":"Vẽ pie chart cho Gender","expected_route":"clarify","expected_tool":null}
