@@ -3,7 +3,10 @@ import os
 import httpx
 import streamlit as st
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL") or st.secrets.get(
+    "BACKEND_URL",
+    "http://localhost:8000",
+)
 
 
 def auth_headers() -> dict[str, str]:

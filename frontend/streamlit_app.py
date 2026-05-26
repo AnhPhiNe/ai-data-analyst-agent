@@ -325,13 +325,6 @@ with st.sidebar:
             clear_dataset_state()
             st.rerun()
 
-    st.markdown("---")
-    st.markdown("### 📊 Project Status")
-    st.markdown("**Role:** AI Engineer Intern Portfolio")
-    st.markdown(f"**Backend:** `{BACKEND_URL}`")
-    if "session_id" in st.session_state:
-        st.markdown(f"**Session:** `{st.session_state.session_id[:8]}...`")
-
 # ─── HANDLE UPLOAD ────────────────────────────────────────────────────────────
 if upload_clicked and uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
