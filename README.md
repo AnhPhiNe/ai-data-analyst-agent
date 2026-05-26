@@ -97,6 +97,15 @@ docker compose up --build
 - Frontend: `http://localhost:8501`
 - Backend docs: `http://localhost:8000/docs`
 
+## Deploy A Live Demo
+
+This repo includes `render.yaml` for a single Render web service. The deployed container starts FastAPI on `127.0.0.1:8000` and exposes Streamlit on Render's public `$PORT`.
+
+1. Push the repository to GitHub.
+2. In Render, create a new Blueprint from this repo.
+3. When prompted, set `GEMINI_API_KEY` or leave it empty to run deterministic routing only.
+4. After deployment, use the generated `*.onrender.com` URL as the Live Demo link.
+
 ### 4. Local Development
 
 ```bash

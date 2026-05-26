@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: ai-data-analyst-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python scripts/start_demo.py
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: BACKEND_URL
+        value: http://127.0.0.1:8000
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "10"
+      - key: MAX_ROWS
+        value: "100000"
+      - key: MAX_COLUMNS
+        value: "200"
+      - key: MAX_SESSIONS
+        value: "25"
+      - key: SESSION_TTL_SECONDS
+        value: "3600"
+      - key: REQUIRE_SESSION_TOKEN
+        value: "false"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "120"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
