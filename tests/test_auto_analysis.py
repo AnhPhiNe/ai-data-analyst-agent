@@ -161,8 +161,9 @@ def test_eta_squared_filters_flat_bar_charts() -> None:
     for item in recommended:
         spec = item["chart_spec"]
         if spec.get("chart_type") == "bar":
-            assert not (spec.get("x") == "group" and spec.get("y") == "hours"), \
-                "Flat bar chart (hours by group) should have been filtered out"
+            assert not (
+                spec.get("x") == "group" and spec.get("y") == "hours"
+            ), "Flat bar chart (hours by group) should have been filtered out"
 
 
 def test_scatter_always_uses_top_correlation_pair() -> None:
@@ -183,14 +184,16 @@ def test_scatter_always_uses_top_correlation_pair() -> None:
     recommended = analysis["recommended_charts"]
 
     scatter_charts = [
-        item for item in recommended
+        item
+        for item in recommended
         if item["chart_spec"].get("chart_type") == "scatter"
     ]
     if scatter_charts:
         spec = scatter_charts[0]["chart_spec"]
         pair = {spec.get("x"), spec.get("y")}
-        assert "attendance" in pair and "score" in pair, \
-            f"Scatter should use attendance vs score (strongest r), got {pair}"
+        assert (
+            "attendance" in pair and "score" in pair
+        ), f"Scatter should use attendance vs score (strongest r), got {pair}"
 
 
 def test_histogram_selects_most_variable_column() -> None:
@@ -199,8 +202,8 @@ def test_histogram_selects_most_variable_column() -> None:
 
     dataframe = pd.DataFrame(
         {
-            "stable": [100, 100, 100, 100, 100],   # CV = 0
-            "variable": [10, 50, 200, 500, 1000],   # CV >> 0
+            "stable": [100, 100, 100, 100, 100],  # CV = 0
+            "variable": [10, 50, 200, 500, 1000],  # CV >> 0
         }
     )
 
@@ -208,11 +211,11 @@ def test_histogram_selects_most_variable_column() -> None:
     recommended = analysis["recommended_charts"]
 
     hist_charts = [
-        item for item in recommended
+        item
+        for item in recommended
         if item["chart_spec"].get("chart_type") == "histogram"
     ]
     assert len(hist_charts) >= 1
-    assert hist_charts[0]["chart_spec"]["x"] == "variable", \
-        "Histogram should prefer the column with highest CV"
-
-
+    assert (
+        hist_charts[0]["chart_spec"]["x"] == "variable"
+    ), "Histogram should prefer the column with highest CV"

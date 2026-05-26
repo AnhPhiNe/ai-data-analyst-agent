@@ -58,7 +58,10 @@ def render_chart_spec(
     if chart_type == "bar":
         x_col = str(spec["x"])
         y_col = str(spec["y"])
-        if not pd.api.types.is_numeric_dtype(dataframe[x_col]) or dataframe[x_col].nunique(dropna=True) <= 20:
+        if (
+            not pd.api.types.is_numeric_dtype(dataframe[x_col])
+            or dataframe[x_col].nunique(dropna=True) <= 20
+        ):
             agg_df = dataframe.groupby(x_col, as_index=False)[y_col].mean()
             agg_df = agg_df.sort_values(by=y_col, ascending=False)
             if pd.api.types.is_numeric_dtype(agg_df[x_col]):
@@ -181,7 +184,6 @@ def render_chart_spec(
     if chart_type != "correlation_heatmap":
         fig.update_layout(height=420)
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
-
 
 
 def default_chart_title(spec: dict[str, object]) -> str | None:

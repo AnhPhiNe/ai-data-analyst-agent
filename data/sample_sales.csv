@@ -1,0 +1,7 @@
+Region,Product_Category,Monthly_Revenue,Order_Count,Customer_Age
+North,A,1200,3,22
+South,B,900,1,35
+North,A,1500,4,41
+West,C,700,2,29
+South,B,1100,2,33
+North,C,1600,5,45

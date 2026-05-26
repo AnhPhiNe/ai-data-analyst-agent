@@ -29,7 +29,12 @@ def generate_auto_analysis(
     if provider is not None:
         try:
             recommended = _recommended_charts_via_gemini(
-                dataframe, profile, provider, numeric_columns, categorical_columns, correlations
+                dataframe,
+                profile,
+                provider,
+                numeric_columns,
+                categorical_columns,
+                correlations,
             )
             if recommended:
                 ai_status["used"] = True
@@ -55,6 +60,8 @@ def generate_auto_analysis(
             continue
         c_type = spec.get("chart_type")
         if not c_type:
+            continue
+        if c_type in seen_types:
             continue
 
         # Filter out bar charts that would produce flat / meaningless visuals
@@ -84,9 +91,8 @@ def generate_auto_analysis(
             final_recommended.append(heatmap_spec)
         else:
             final_recommended[3] = heatmap_spec
-            
-    final_recommended = final_recommended[:4]
 
+    final_recommended = final_recommended[:4]
 
     return {
         "workflow_steps": [
@@ -123,17 +129,29 @@ def _recommended_charts_via_gemini(
         "columns": profile.get("columns"),
         "column_names": profile.get("column_names"),
         "numeric_highlights": [
-            {"column": row["column"], "mean": row["mean"], "min": row["min"], "max": row["max"]}
+            {
+                "column": row["column"],
+                "mean": row["mean"],
+                "min": row["min"],
+                "max": row["max"],
+            }
             for row in profile.get("numeric_summary", [])[:5]
         ],
         "categorical_highlights": [
-            {"column": row["column"], "top_value": row["values"][0]["value"] if row.get("values") else None}
+            {
+                "column": row["column"],
+                "top_value": row["values"][0]["value"] if row.get("values") else None,
+            }
             for row in profile.get("top_categories", [])[:5]
         ],
         "correlation_highlights": [
-            {"column_a": row["column_a"], "column_b": row["column_b"], "correlation": row["correlation"]}
+            {
+                "column_a": row["column_a"],
+                "column_b": row["column_b"],
+                "correlation": row["correlation"],
+            }
             for row in correlations[:5]
-        ]
+        ],
     }
 
     prompt = f"""Bạn là một chuyên gia cao cấp về Khoa học Dữ liệu (Senior Data Scientist).
@@ -209,11 +227,14 @@ KHÔNG viết thêm bất kỳ từ giải thích nào trước hoặc sau khố
                 if x_col in dataframe.columns and y_col in dataframe.columns:
                     try:
                         means = dataframe.groupby(x_col)[y_col].mean()
-                        if means.max() > 0 and (means.max() - means.min()) / means.max() < 0.05:
+                        if (
+                            means.max() > 0
+                            and (means.max() - means.min()) / means.max() < 0.05
+                        ):
                             continue  # Skip flat bar charts
                     except Exception:
                         pass
-                        
+
             # Programmatic guardrail against spaghetti line charts
             if spec_clean.get("chart_type") == "line":
                 x_col = spec_clean.get("x")
@@ -221,7 +242,7 @@ KHÔNG viết thêm bất kỳ từ giải thích nào trước hoặc sau khố
                     if not pd.api.types.is_datetime64_any_dtype(dataframe[x_col]):
                         # Convert to scatter to avoid messy spaghetti lines for non-temporal data
                         spec_clean["chart_type"] = "scatter"
-                        
+
             # Programmatic guardrail to auto-correct flipped axes in scatter plots
             if spec_clean.get("chart_type") == "scatter":
                 x_col = spec_clean.get("x")
@@ -231,15 +252,12 @@ KHÔNG viết thêm bất kỳ từ giải thích nào trước hoặc sau khố
                     if correct_x != x_col:
                         spec_clean["x"] = correct_x
                         spec_clean["y"] = correct_y
-            
-            valid_charts.append({
-                "title": str(title),
-                "chart_spec": spec_clean,
-                "reason": str(reason)
-            })
+
+            valid_charts.append(
+                {"title": str(title), "chart_spec": spec_clean, "reason": str(reason)}
+            )
 
     return valid_charts[:4] if valid_charts else None
-
 
 
 def _overview(profile: dict[str, object]) -> dict[str, object]:
@@ -369,41 +387,49 @@ def _recommended_charts(
         mean_val = float(series.mean())
         std_val = float(series.std())
         cv = std_val / abs(mean_val) if mean_val != 0 else 0.0
-        candidates.append({
-            "chart_type": "histogram",
-            "score": round(cv, 4),
-            "spec": {
-                "title": f"Distribution of {col}",
-                "chart_spec": {
-                    "chart_type": "histogram",
-                    "x": col,
-                    "bins": get_histogram_bins(dataframe, col),
+        candidates.append(
+            {
+                "chart_type": "histogram",
+                "score": round(cv, 4),
+                "spec": {
+                    "title": f"Distribution of {col}",
+                    "chart_spec": {
+                        "chart_type": "histogram",
+                        "x": col,
+                        "bins": get_histogram_bins(dataframe, col),
+                    },
+                    "reason": f"The majority of {col} values center around its mean of {mean_val:.2f}, with a standard deviation of {std_val:.2f} (CV={cv:.2f}).",
                 },
-                "reason": f"The majority of {col} values center around its mean of {mean_val:.2f}, with a standard deviation of {std_val:.2f} (CV={cv:.2f}).",
-            },
-        })
+            }
+        )
 
     # --- scatter candidates (one per correlation pair) ---
     for pair in correlations:
         col_a = str(pair["column_a"])
         col_b = str(pair["column_b"])
-        if _is_discrete_numeric(dataframe, col_a) or _is_discrete_numeric(dataframe, col_b):
+        if _is_discrete_numeric(dataframe, col_a) or _is_discrete_numeric(
+            dataframe, col_b
+        ):
             continue
-        abs_r = float(pair.get("abs_correlation", abs(float(pair.get("correlation", 0)))))
+        abs_r = float(
+            pair.get("abs_correlation", abs(float(pair.get("correlation", 0))))
+        )
         x_col, y_col = _determine_scatter_axes(col_a, col_b)
-        candidates.append({
-            "chart_type": "scatter",
-            "score": round(abs_r, 4),
-            "spec": {
-                "title": f"{y_col.replace('_', ' ')} by {x_col.replace('_', ' ')}",
-                "chart_spec": {
-                    "chart_type": "scatter",
-                    "x": x_col,
-                    "y": y_col,
+        candidates.append(
+            {
+                "chart_type": "scatter",
+                "score": round(abs_r, 4),
+                "spec": {
+                    "title": f"{y_col.replace('_', ' ')} by {x_col.replace('_', ' ')}",
+                    "chart_spec": {
+                        "chart_type": "scatter",
+                        "x": x_col,
+                        "y": y_col,
+                    },
+                    "reason": f"There is a {'positive' if float(pair['correlation']) > 0 else 'negative'} correlation (r={pair['correlation']}) between {x_col} and {y_col}, indicating a related trend.",
                 },
-                "reason": f"There is a {'positive' if float(pair['correlation']) > 0 else 'negative'} correlation (r={pair['correlation']}) between {x_col} and {y_col}, indicating a related trend.",
-            },
-        })
+            }
+        )
 
     # --- bar candidates (categorical X × numeric Y, scored by eta-squared) ---
     for cat_col in categorical_columns[:4]:
@@ -411,19 +437,21 @@ def _recommended_charts(
             eta_sq = _eta_squared(dataframe, cat_col, num_col)
             if eta_sq < 0.01:
                 continue  # skip flat / no-effect pairs
-            candidates.append({
-                "chart_type": "bar",
-                "score": round(eta_sq, 4),
-                "spec": {
-                    "title": f"Average {num_col} by {cat_col}",
-                    "chart_spec": {
-                        "chart_type": "bar",
-                        "x": cat_col,
-                        "y": num_col,
+            candidates.append(
+                {
+                    "chart_type": "bar",
+                    "score": round(eta_sq, 4),
+                    "spec": {
+                        "title": f"Average {num_col} by {cat_col}",
+                        "chart_spec": {
+                            "chart_type": "bar",
+                            "x": cat_col,
+                            "y": num_col,
+                        },
+                        "reason": f"Average {num_col} shows a significant variation across different {cat_col} groups (η²={eta_sq:.3f}), highlighting a strong segment effect.",
                     },
-                    "reason": f"Average {num_col} shows a significant variation across different {cat_col} groups (η²={eta_sq:.3f}), highlighting a strong segment effect.",
-                },
-            })
+                }
+            )
 
     # --- pie candidates (low-cardinality categorical, scored by entropy) ---
     for cat_col in categorical_columns[:4]:
@@ -436,30 +464,34 @@ def _recommended_charts(
         norm_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
         top_cat = counts.idxmax()
         top_pct = counts.max() * 100
-        candidates.append({
-            "chart_type": "pie",
-            "score": round(norm_entropy, 4),
-            "spec": {
-                "title": f"Distribution of {cat_col}",
-                "chart_spec": {"chart_type": "pie", "names": cat_col},
-                "reason": f"The most dominant category in {cat_col} is '{top_cat}', making up {top_pct:.1f}% of the dataset.",
-            },
-        })
+        candidates.append(
+            {
+                "chart_type": "pie",
+                "score": round(norm_entropy, 4),
+                "spec": {
+                    "title": f"Distribution of {cat_col}",
+                    "chart_spec": {"chart_type": "pie", "names": cat_col},
+                    "reason": f"The most dominant category in {cat_col} is '{top_cat}', making up {top_pct:.1f}% of the dataset.",
+                },
+            }
+        )
 
     # --- correlation heatmap (fixed high-priority when >= 2 numeric cols) ---
     if len(numeric_columns) >= 2:
-        candidates.append({
-            "chart_type": "correlation_heatmap",
-            "score": 1.0,
-            "spec": {
-                "title": "Correlation Heatmap",
-                "chart_spec": {
-                    "chart_type": "correlation_heatmap",
-                    "columns": numeric_columns[:12],
+        candidates.append(
+            {
+                "chart_type": "correlation_heatmap",
+                "score": 1.0,
+                "spec": {
+                    "title": "Correlation Heatmap",
+                    "chart_spec": {
+                        "chart_type": "correlation_heatmap",
+                        "columns": numeric_columns[:12],
+                    },
+                    "reason": "This heatmap reveals the strongest positive and negative linear correlations among all numeric variables, helping identify key drivers.",
                 },
-                "reason": "This heatmap reveals the strongest positive and negative linear correlations among all numeric variables, helping identify key drivers.",
-            },
-        })
+            }
+        )
 
     # --- select top 4 with unique chart types, ordered by score ---
     candidates.sort(key=lambda c: float(c["score"]), reverse=True)
@@ -546,16 +578,19 @@ def _categorical_columns(dataframe: pd.DataFrame) -> list[str]:
             cols.append(str(column))
 
     filtered = [
-        c for c in cols
+        c
+        for c in cols
         if not _is_id_like_column(c)
         and not c.lower().endswith("date")
         and not c.lower().endswith("time")
-        and dataframe[c].nunique(dropna=True) <= 15  # Limit cardinality to 15 to avoid messy charts (e.g. by Name)
+        and dataframe[c].nunique(dropna=True)
+        <= 15  # Limit cardinality to 15 to avoid messy charts (e.g. by Name)
     ]
     if filtered:
         return filtered
     fallback = [
-        c for c in cols
+        c
+        for c in cols
         if not _is_id_like_column(c)
         and not c.lower().endswith("date")
         and not c.lower().endswith("time")
@@ -630,5 +665,3 @@ def _is_discrete_numeric(dataframe: pd.DataFrame, col: str) -> bool:
     if len(dataframe) > 15:
         return n_unique <= 15
     return n_unique <= 2
-
-

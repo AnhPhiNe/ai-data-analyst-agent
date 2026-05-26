@@ -2,17 +2,20 @@ import json
 import logging
 from queue import Queue
 from threading import Thread
+from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.agent.orchestrator import run_agent_turn
 from backend.agent.gemini_runtime import GeminiProvider, LLMProvider
 from backend.agent.suggestions import generate_suggested_content
 from backend.core.config import get_settings
 from backend.core.logging import configure_logging, log_event
+from backend.core.rate_limit import InMemoryRateLimiter
 from backend.schemas import (
     AutoAnalysisResponse,
     ChatRequest,
@@ -33,6 +36,10 @@ logger = logging.getLogger("backend.main")
 session_store.configure(
     ttl_seconds=settings.session_ttl_seconds, max_sessions=settings.max_sessions
 )
+rate_limiter = InMemoryRateLimiter(
+    max_requests=settings.rate_limit_per_minute,
+    window_seconds=settings.rate_limit_window_seconds,
+)
 
 app = FastAPI(
     title=settings.app_name,
@@ -47,6 +54,62 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    started_at = perf_counter()
+    client_host = request.client.host if request.client else "unknown"
+    rate_limited_paths = (
+        "/datasets/upload",
+        "/chat/query",
+        "/chat/query/stream",
+    )
+
+    if request.url.path in rate_limited_paths:
+        rate_key = f"{client_host}:{request.url.path}"
+        if not rate_limiter.allow(rate_key):
+            log_event(
+                logger,
+                "http_request_rate_limited",
+                request_id=request_id,
+                path=request.url.path,
+                client_host=client_host,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Too many requests. Please try again shortly."},
+                headers={"X-Request-ID": request_id},
+            )
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round((perf_counter() - started_at) * 1000, 2)
+        logger.exception(
+            "http_request_failed",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": duration_ms,
+            },
+        )
+        raise
+
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    log_event(
+        logger,
+        "http_request_completed",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+    )
+    return response
 
 
 @app.get("/health")
@@ -175,7 +238,9 @@ def get_dataset_auto_analysis(
             session.profile_cache = profile_dataset(session.dataframe)
         profile = session.profile_cache
     provider = get_llm_provider()
-    analysis = generate_auto_analysis(session.dataframe, profile=profile, provider=provider)
+    analysis = generate_auto_analysis(
+        session.dataframe, profile=profile, provider=provider
+    )
 
     log_event(
         logger,

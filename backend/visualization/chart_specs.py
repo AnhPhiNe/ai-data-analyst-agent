@@ -54,7 +54,11 @@ def validate_chart_spec(
         _require_numeric(dataframe, chart_spec.y)
         # Prevent bar chart if x is a continuous numeric column with > 10 unique values
         x_col = chart_spec.x
-        if x_col is not None and is_numeric_dtype(dataframe[x_col]) and not is_bool_dtype(dataframe[x_col]):
+        if (
+            x_col is not None
+            and is_numeric_dtype(dataframe[x_col])
+            and not is_bool_dtype(dataframe[x_col])
+        ):
             unique_count = int(dataframe[x_col].nunique(dropna=True))
             if unique_count > 10:
                 raise ChartSpecValidationError(

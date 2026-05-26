@@ -107,7 +107,7 @@ def generate_suggested_content(
 
     return SuggestedContent(
         questions=questions[:MAX_QUESTIONS],
-        insights=suggested.insights if suggested.insights else fallback.insights,
+        insights=fallback.insights,
         source="gemini",
     )
 
@@ -142,6 +142,7 @@ def _build_suggestions_prompt(
         "- Chỉ nhắc tới cột thật trong PROFILE.column_names.\n"
         "- Không tạo câu hỏi vô nghĩa hoặc cần business context không có trong dữ liệu.\n\n"
         "Luật cho insights:\n"
+        "- Không tự tạo insights ngoài các tín hiệu trong PROFILE và PROFILING_SIGNALS; hệ thống sẽ ưu tiên insight deterministic nếu phản hồi không đạt chuẩn.\n"
         "- Viết 3 đến 5 câu insights cực kỳ sắc bén bằng tiếng Việt dựa trên PROFILE và PROFILING_SIGNALS.\n"
         "- Khác với thống kê máy móc, mỗi câu insight phải kết hợp nhiều con số để kể một câu chuyện phân tích (ví dụ: thay vì nói 'Missing 687 Cabin', hãy phân tích 'Hơn 77% dữ liệu Cabin bị thiếu, cho thấy việc ghi nhận vị trí buồng phòng rất kém').\n"
         "- KHÔNG liệt kê các con số khô khan, hãy phân tích ý nghĩa thực tiễn của chúng.\n\n"

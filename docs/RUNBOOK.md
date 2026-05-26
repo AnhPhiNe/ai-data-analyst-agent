@@ -50,13 +50,19 @@ pytest
 Expected result at the time of writing:
 
 ```text
-140 passed
+All tests passed
 ```
 
 Router eval:
 
 ```bash
 python scripts/evaluate_router.py
+```
+
+Golden answer eval:
+
+```bash
+python scripts/evaluate_golden_answers.py
 ```
 
 ## 5. Troubleshooting
@@ -79,4 +85,4 @@ Open the tool trace and check whether `generate_chart_spec` returned a validated
 
 ## 6. Production Notes
 
-This project is intentionally scoped as a portfolio MVP. It now includes structured request logs and lightweight session ownership support, but production still needs persistent storage, real auth, rate limits, monitoring, and deployment secrets management.
+This project is intentionally scoped as a portfolio MVP. It now includes structured request logs, request ids, lightweight session ownership support, and basic per-process rate limits, but production still needs persistent storage, real auth, centralized monitoring, and deployment secrets management.

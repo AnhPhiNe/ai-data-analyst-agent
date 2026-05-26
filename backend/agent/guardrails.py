@@ -118,6 +118,7 @@ BLOCKED_PATTERNS: list[tuple[GuardrailCategory, tuple[str, ...], str]] = [
     ),
 ]
 
+
 def check_guardrails(question: str) -> GuardrailResult:
     # 1. Raw signature check for special strings (eval(, exec(, path prefixes, etc.)
     raw_lower = question.lower()

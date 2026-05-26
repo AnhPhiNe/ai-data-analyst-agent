@@ -8,8 +8,10 @@ This project is intentionally scoped as a portfolio MVP. The items below are the
 - Uploads are bounded by file size, row count, and column count.
 - Profile and suggested-content responses are cached per session.
 - Optional session token ownership can be enabled with `REQUIRE_SESSION_TOKEN=true`.
-- Backend emits structured JSON log events for upload, profile, suggestions, and chat turns.
+- Backend emits structured JSON log events with request ids and latency for HTTP requests, upload, profile, suggestions, and chat turns.
+- Upload and chat endpoints have a basic per-process rate limiter.
 - Router behavior has a small JSONL eval set.
+- Golden answer behavior has a small multi-dataset JSONL eval set.
 
 ## Next Production Steps
 
@@ -27,7 +29,7 @@ Track route type, selected tool, latency, LLM fallback rate, validation failures
 
 ### LLM Provider Abstraction
 
-Keep the current `LLMProvider` protocol, then add provider-specific structured-output implementations. For Gemini/OpenAI-style tool calling, prefer native schema/function calling over plain JSON prompting when available.
+Keep the current `LLMProvider` protocol, then add provider-specific structured-output implementations for every LLM-backed feature. The tool-selection path already attempts Gemini structured JSON output when the SDK supports it, and falls back to text JSON parsing for compatibility.
 
 ### Golden Answer Evaluation
 

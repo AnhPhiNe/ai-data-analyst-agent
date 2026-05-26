@@ -62,10 +62,11 @@ class GeminiProvider:
     def generate(self, prompt: str) -> str:
         try:
             from google import genai
+
             response = self._client.models.generate_content(
-                model=self.model, 
+                model=self.model,
                 contents=prompt,
-                config=genai.types.GenerateContentConfig(temperature=0.0)
+                config=genai.types.GenerateContentConfig(temperature=0.0),
             )
         except Exception as exc:
             if _is_retryable_exception(exc):
@@ -75,6 +76,31 @@ class GeminiProvider:
         text = getattr(response, "text", None)
         if not text:
             raise LLMRuntimeError("Gemini returned an empty response.")
+        return str(text)
+
+    def generate_structured(self, prompt: str, response_schema: type[BaseModel]) -> str:
+        try:
+            from google import genai
+
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                ),
+            )
+        except TypeError:
+            return self.generate(prompt)
+        except Exception as exc:
+            if _is_retryable_exception(exc):
+                raise TransientLLMError(str(exc)) from exc
+            raise LLMRuntimeError(str(exc)) from exc
+
+        text = getattr(response, "text", None)
+        if not text:
+            raise LLMRuntimeError("Gemini returned an empty structured response.")
         return str(text)
 
 
@@ -89,8 +115,12 @@ def choose_tool_with_gemini(
     prompt = build_tool_selection_prompt(dataframe, question, profile_summary)
 
     try:
-        raw_response = _generate_with_retry(
-            provider, prompt, sleep_fn=sleep_fn, max_retries=max_retries
+        raw_response = _generate_structured_with_retry(
+            provider,
+            prompt,
+            AgentToolSelection,
+            sleep_fn=sleep_fn,
+            max_retries=max_retries,
         )
         selection = parse_tool_selection_response(raw_response)
     except TransientLLMError:
@@ -221,6 +251,30 @@ def _generate_with_retry(
     while True:
         try:
             return provider.generate(prompt)
+        except TransientLLMError:
+            if attempt >= max_retries:
+                raise
+            sleep_fn(0.25 * (2**attempt))
+            attempt += 1
+
+
+def _generate_structured_with_retry(
+    provider: LLMProvider,
+    prompt: str,
+    response_schema: type[BaseModel],
+    sleep_fn: Callable[[float], None],
+    max_retries: int,
+) -> str:
+    generate_structured = getattr(provider, "generate_structured", None)
+    if not callable(generate_structured):
+        return _generate_with_retry(
+            provider, prompt, sleep_fn=sleep_fn, max_retries=max_retries
+        )
+
+    attempt = 0
+    while True:
+        try:
+            return str(generate_structured(prompt, response_schema))
         except TransientLLMError:
             if attempt >= max_retries:
                 raise

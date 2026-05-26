@@ -8,16 +8,11 @@ from frontend.api import (
     fetch_profile,
     fetch_suggestions,
     fetch_auto_analysis,
-    stream_chat_question,
-)
-from frontend.charts import (
-    render_distribution_chart,
 )
 from frontend.components import (
     render_dashboard_tab,
     render_data_explorer_tab,
     render_chat_tab,
-    _trace_title,
 )
 
 
@@ -306,7 +301,12 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    upload_clicked = st.button("🚀 Analyze", type="primary", disabled=uploaded_file is None, use_container_width=True)
+    upload_clicked = st.button(
+        "🚀 Analyze",
+        type="primary",
+        disabled=uploaded_file is None,
+        use_container_width=True,
+    )
 
     # Show file info if dataset is loaded
     if "profile" in st.session_state:
@@ -426,7 +426,9 @@ if upload_clicked and uploaded_file is not None:
                 st.success("Dataset uploaded successfully.")
 
 # ─── MAIN CONTENT AREA ────────────────────────────────────────────────────────
-st.markdown('<div class="main-title">AI Data Analyst Agent</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="main-title">AI Data Analyst Agent</div>', unsafe_allow_html=True
+)
 st.markdown(
     '<div class="main-caption">Safe tabular data analysis with FastAPI, Streamlit, pandas tools, Plotly, and optional Gemini.</div>',
     unsafe_allow_html=True,
@@ -479,4 +481,3 @@ else:
         render_data_explorer_tab(profile)
     elif active_tab == TAB_OPTIONS[2]:
         render_chat_tab(auto_analysis, suggestions)
-

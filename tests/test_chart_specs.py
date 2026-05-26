@@ -116,6 +116,7 @@ def test_validate_chart_spec_rejects_missing_required_axis() -> None:
 
 def test_validate_bar_chart_rejects_continuous_numeric_x() -> None:
     import pandas as pd
+
     dataframe = pd.DataFrame(
         {
             "attendance": list(range(60, 101)),  # 41 unique values
@@ -129,12 +130,16 @@ def test_validate_bar_chart_rejects_continuous_numeric_x() -> None:
         "y": "exam_score",
     }
 
-    with pytest.raises(ChartSpecValidationError, match="continuous numeric column with 41 unique values"):
+    with pytest.raises(
+        ChartSpecValidationError,
+        match="continuous numeric column with 41 unique values",
+    ):
         validate_chart_spec(spec, dataframe)
 
 
 def test_validate_bar_chart_allows_discrete_numeric_x() -> None:
     import pandas as pd
+
     dataframe = pd.DataFrame(
         {
             "rating": [1, 2, 3, 4, 5, 5, 4, 3, 2, 1],  # 5 unique values (<= 10)
@@ -150,4 +155,3 @@ def test_validate_bar_chart_allows_discrete_numeric_x() -> None:
 
     validated = validate_chart_spec(spec, dataframe)
     assert validated == spec
-
