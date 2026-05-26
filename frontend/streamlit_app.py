@@ -1,15 +1,22 @@
 import io
+import sys
+from pathlib import Path
+
 import httpx
 import pandas as pd
 import streamlit as st
 
-from frontend.api import (
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from frontend.api import (  # noqa: E402
     BACKEND_URL,
     fetch_profile,
     fetch_suggestions,
     fetch_auto_analysis,
 )
-from frontend.components import (
+from frontend.components import (  # noqa: E402
     render_dashboard_tab,
     render_data_explorer_tab,
     render_chat_tab,
