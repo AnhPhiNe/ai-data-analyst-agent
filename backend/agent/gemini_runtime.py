@@ -52,16 +52,21 @@ class GeminiProvider:
     def __init__(self, api_key: str, model: str) -> None:
         self.api_key = api_key
         self.model = model
+        try:
+            from google import genai
+
+            self._client = genai.Client(api_key=api_key)
+        except ImportError as exc:
+            raise LLMRuntimeError("google-genai is not installed.") from exc
 
     def generate(self, prompt: str) -> str:
         try:
             from google import genai
-        except ImportError as exc:
-            raise LLMRuntimeError("google-genai is not installed.") from exc
-
-        try:
-            client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(model=self.model, contents=prompt)
+            response = self._client.models.generate_content(
+                model=self.model, 
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(temperature=0.0)
+            )
         except Exception as exc:
             if _is_retryable_exception(exc):
                 raise TransientLLMError(str(exc)) from exc
@@ -84,7 +89,9 @@ def choose_tool_with_gemini(
     prompt = build_tool_selection_prompt(dataframe, question, profile_summary)
 
     try:
-        raw_response = _generate_with_retry(provider, prompt, sleep_fn=sleep_fn, max_retries=max_retries)
+        raw_response = _generate_with_retry(
+            provider, prompt, sleep_fn=sleep_fn, max_retries=max_retries
+        )
         selection = parse_tool_selection_response(raw_response)
     except TransientLLMError:
         return GeminiRuntimeResult(
@@ -92,12 +99,15 @@ def choose_tool_with_gemini(
             message="Gemini đang tạm thời quá tải. Vui lòng thử lại sau.",
         )
     except (LLMRuntimeError, ValueError) as exc:
-        return GeminiRuntimeResult(status="error", message=f"Không thể xử lý phản hồi Gemini: {exc}")
+        return GeminiRuntimeResult(
+            status="error", message=f"Không thể xử lý phản hồi Gemini: {exc}"
+        )
 
     if selection.action == "clarify":
         return GeminiRuntimeResult(
             status="clarify",
-            message=selection.message or "Bạn có thể nói rõ hơn metric hoặc cột muốn phân tích không?",
+            message=selection.message
+            or "Bạn có thể nói rõ hơn metric hoặc cột muốn phân tích không?",
             confidence=selection.confidence,
             raw_response=raw_response,
         )
@@ -118,7 +128,9 @@ def choose_tool_with_gemini(
             raw_response=raw_response,
         )
 
-    repaired_arguments = repair_tool_column_arguments(dataframe, selection.tool_name, selection.arguments)
+    repaired_arguments = repair_tool_column_arguments(
+        dataframe, selection.tool_name, selection.arguments
+    )
     validation = validate_tool_call(dataframe, selection.tool_name, repaired_arguments)
     if not validation.is_valid:
         return GeminiRuntimeResult(
@@ -194,7 +206,9 @@ def parse_tool_selection_response(raw_response: str) -> AgentToolSelection:
     except ValidationError as exc:
         first_error = exc.errors()[0]
         field = ".".join(str(item) for item in first_error["loc"])
-        raise ValueError(f"Invalid selection field '{field}': {first_error['msg']}") from exc
+        raise ValueError(
+            f"Invalid selection field '{field}': {first_error['msg']}"
+        ) from exc
 
 
 def _generate_with_retry(
@@ -230,4 +244,7 @@ def _extract_json_object(raw_response: str) -> str:
 
 def _is_retryable_exception(exc: Exception) -> bool:
     text = str(exc).lower()
-    return any(token in text for token in ("429", "503", "timeout", "temporarily", "unavailable"))
+    return any(
+        token in text
+        for token in ("429", "503", "timeout", "temporarily", "unavailable")
+    )

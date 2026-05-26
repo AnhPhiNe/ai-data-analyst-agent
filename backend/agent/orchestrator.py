@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 from backend.agent.clarification_memory import (
@@ -7,7 +8,10 @@ from backend.agent.clarification_memory import (
     try_resolve_pending_clarification,
 )
 from backend.agent.column_argument_repair import repair_tool_column_arguments
-from backend.agent.correlation_helpers import correlation_target_issue, find_mentioned_numeric_column
+from backend.agent.correlation_helpers import (
+    correlation_target_issue,
+    find_mentioned_numeric_column,
+)
 from backend.agent.gemini_runtime import LLMProvider, choose_tool_with_gemini
 from backend.agent.guardrails import check_guardrails
 from backend.agent.response_composer import (
@@ -23,45 +27,72 @@ from backend.services.profiling import profile_dataset
 from backend.services.session_store import DatasetSession, session_store
 from backend.tools.safe_pandas import execute_tool
 
+TraceCallback = Callable[[ToolTraceItem], None]
+
 
 def run_agent_turn(
     session: DatasetSession,
     question: str,
     provider: LLMProvider | None = None,
+    event_callback: TraceCallback | None = None,
 ) -> ChatResponse:
     traces: list[ToolTraceItem] = []
 
     guardrail = check_guardrails(question)
     if not guardrail.is_allowed:
+        guardrail_trace = ToolTraceItem(
+            source="guardrails",
+            status="blocked",
+            message=guardrail.message,
+        )
+        _record_trace(traces, guardrail_trace, event_callback)
         response = ChatResponse(
             session_id=session.session_id,
             answer=guardrail.message,
             response_type="blocked",
-            tool_trace=[
-                ToolTraceItem(
-                    source="guardrails",
-                    status="blocked",
-                    message=guardrail.message,
-                )
-            ],
+            tool_trace=traces,
             is_blocked=True,
         )
         _remember(session.session_id, question, response.answer, "guardrails")
         return response
+
+    def execute_tool_with_events(
+        session: DatasetSession,
+        question: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        traces: list[ToolTraceItem],
+        source: str,
+    ) -> ChatResponse:
+        return execute_validated_tool(
+            session=session,
+            question=question,
+            tool_name=tool_name,
+            arguments=arguments,
+            traces=traces,
+            source=source,
+            event_callback=event_callback,
+        )
 
     if session.pending_clarification is not None:
         pending_response = try_resolve_pending_clarification(
             session,
             question,
             traces,
-            execute_validated_tool,
+            execute_tool_with_events,
         )
         if pending_response is not None:
-            _remember(session.session_id, question, pending_response.answer, "clarification_followup")
+            _remember(
+                session.session_id,
+                question,
+                pending_response.answer,
+                "clarification_followup",
+            )
             return pending_response
 
     router_decision = route_question(session.dataframe, question)
-    traces.append(
+    _record_trace(
+        traces,
         ToolTraceItem(
             source="router",
             tool_name=router_decision.tool_name,
@@ -69,7 +100,8 @@ def run_agent_turn(
             status=router_decision.route_type,
             message=router_decision.message or "Router decision completed.",
             confidence=router_decision.confidence,
-        )
+        ),
+        event_callback,
     )
 
     if router_decision.route_type == "clarify":
@@ -91,11 +123,18 @@ def run_agent_turn(
             arguments=router_decision.arguments,
             traces=traces,
             source="router",
+            event_callback=event_callback,
         )
         _remember(session.session_id, question, response.answer, "router_tool")
         return response
 
     if provider is None:
+        skipped_trace = ToolTraceItem(
+            source="gemini",
+            status="skipped",
+            message="Gemini provider is not configured.",
+        )
+        _record_trace(traces, skipped_trace, event_callback)
         response = ChatResponse(
             session_id=session.session_id,
             answer=(
@@ -104,14 +143,7 @@ def run_agent_turn(
                 "hoặc cấu hình GEMINI_API_KEY để bật lớp hiểu ngôn ngữ tự nhiên nâng cao."
             ),
             response_type="error",
-            tool_trace=traces
-            + [
-                ToolTraceItem(
-                    source="gemini",
-                    status="skipped",
-                    message="Gemini provider is not configured.",
-                )
-            ],
+            tool_trace=traces,
             clarification_options=column_options(session),
         )
         _remember(session.session_id, question, response.answer, "missing_gemini")
@@ -123,7 +155,8 @@ def run_agent_turn(
         provider=provider,
         profile_summary=_safe_profile_summary(session),
     )
-    traces.append(
+    _record_trace(
+        traces,
         ToolTraceItem(
             source="gemini",
             tool_name=gemini_result.tool_name,
@@ -131,7 +164,8 @@ def run_agent_turn(
             status=gemini_result.status,
             message=gemini_result.message,
             confidence=gemini_result.confidence,
-        )
+        ),
+        event_callback,
     )
 
     if gemini_result.status == "clarify":
@@ -172,6 +206,7 @@ def run_agent_turn(
         arguments=gemini_result.arguments or {},
         traces=traces,
         source="gemini",
+        event_callback=event_callback,
     )
     _remember(session.session_id, question, response.answer, "gemini_tool")
     return response
@@ -184,18 +219,23 @@ def execute_validated_tool(
     arguments: dict[str, Any],
     traces: list[ToolTraceItem],
     source: str,
+    event_callback: TraceCallback | None = None,
 ) -> ChatResponse:
-    arguments = _repair_tool_arguments(session, question, tool_name, arguments, traces)
+    arguments = _repair_tool_arguments(
+        session, question, tool_name, arguments, traces, event_callback
+    )
     target_issue = correlation_target_issue(session, question, tool_name)
     if target_issue is not None:
-        traces.append(
+        _record_trace(
+            traces,
             ToolTraceItem(
                 source="agent_validation",
                 tool_name=tool_name,
                 arguments=arguments,
                 status="clarify",
                 message=target_issue,
-            )
+            ),
+            event_callback,
         )
         return clarification_response(
             session.session_id,
@@ -205,14 +245,16 @@ def execute_validated_tool(
         )
 
     validation = validate_tool_call(session.dataframe, tool_name, arguments)
-    traces.append(
+    _record_trace(
+        traces,
         ToolTraceItem(
             source="tool_validation",
             tool_name=tool_name,
             arguments=arguments,
             status="success" if validation.is_valid else "error",
             message=validation.message,
-        )
+        ),
+        event_callback,
     )
     if not validation.is_valid:
         response = clarification_response(
@@ -221,18 +263,24 @@ def execute_validated_tool(
             traces,
             options=_validation_options(session, validation.message),
         )
-        set_pending_from_tool_call(session, question, tool_name, arguments, response.answer)
+        set_pending_from_tool_call(
+            session, question, tool_name, arguments, response.answer
+        )
         return response
 
-    tool_result = execute_tool(session.dataframe, tool_name, validation.normalized_arguments)
-    traces.append(
+    tool_result = execute_tool(
+        session.dataframe, tool_name, validation.normalized_arguments
+    )
+    _record_trace(
+        traces,
         ToolTraceItem(
             source="tool_executor",
             tool_name=tool_name,
             arguments=validation.normalized_arguments,
             status=tool_result.status,
             message=tool_result.message,
-        )
+        ),
+        event_callback,
     )
 
     if tool_result.status == "error":
@@ -258,7 +306,11 @@ def execute_validated_tool(
 
 def _safe_profile_summary(session: DatasetSession) -> dict[str, Any]:
     cached_profile = session.profile_cache
-    profile = cached_profile if cached_profile is not None else profile_dataset(session.dataframe)
+    profile = (
+        cached_profile
+        if cached_profile is not None
+        else profile_dataset(session.dataframe)
+    )
     return {
         "rows": profile["rows"],
         "columns": profile["columns"],
@@ -270,7 +322,9 @@ def _safe_profile_summary(session: DatasetSession) -> dict[str, Any]:
 
 
 def _remember(session_id: str, question: str, answer: str, route: str) -> None:
-    session_store.add_chat_turn(session_id=session_id, question=question, answer=answer, route=route)
+    session_store.add_chat_turn(
+        session_id=session_id, question=question, answer=answer, route=route
+    )
 
 
 def _repair_tool_arguments(
@@ -279,17 +333,22 @@ def _repair_tool_arguments(
     tool_name: str,
     arguments: dict[str, Any],
     traces: list[ToolTraceItem],
+    event_callback: TraceCallback | None = None,
 ) -> dict[str, Any]:
-    repaired_arguments = repair_tool_column_arguments(session.dataframe, tool_name, arguments)
+    repaired_arguments = repair_tool_column_arguments(
+        session.dataframe, tool_name, arguments
+    )
     if repaired_arguments != arguments:
-        traces.append(
+        _record_trace(
+            traces,
             ToolTraceItem(
                 source="agent_column_resolver",
                 tool_name=tool_name,
                 arguments=repaired_arguments,
                 status="success",
                 message="Đã chuẩn hóa tên cột trong tool arguments theo schema dataset.",
-            )
+            ),
+            event_callback,
         )
         arguments = repaired_arguments
 
@@ -307,17 +366,29 @@ def _repair_tool_arguments(
         return arguments
 
     repaired_arguments = {**arguments, "columns": [target_column, *columns]}
-    traces.append(
+    _record_trace(
+        traces,
         ToolTraceItem(
             source="agent_repair",
             tool_name=tool_name,
             arguments=repaired_arguments,
             status="success",
             message=f"Đã thêm cột mục tiêu '{target_column}' vào correlation_analysis.",
-        )
+        ),
+        event_callback,
     )
     return repaired_arguments
 
 
 def _validation_options(session: DatasetSession, validation_message: str) -> list[str]:
     return column_options(session, numeric_only="must be numeric" in validation_message)
+
+
+def _record_trace(
+    traces: list[ToolTraceItem],
+    trace: ToolTraceItem,
+    event_callback: TraceCallback | None = None,
+) -> None:
+    traces.append(trace)
+    if event_callback is not None:
+        event_callback(trace)

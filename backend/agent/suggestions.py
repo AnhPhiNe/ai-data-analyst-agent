@@ -81,7 +81,9 @@ class SuggestedContent(BaseModel):
     source: str = "fallback"
 
 
-def generate_suggested_content(dataframe: pd.DataFrame, provider: LLMProvider | None = None) -> SuggestedContent:
+def generate_suggested_content(
+    dataframe: pd.DataFrame, provider: LLMProvider | None = None
+) -> SuggestedContent:
     profile = profile_dataset(dataframe)
     signals = _build_profiling_signals(profile, dataframe)
     fallback = _fallback_suggested_content(profile, signals)
@@ -99,16 +101,20 @@ def generate_suggested_content(dataframe: pd.DataFrame, provider: LLMProvider | 
 
     if not validated_questions:
         return fallback
-    questions = _validate_questions(_dedupe(validated_questions + fallback.questions), profile)
+    questions = _validate_questions(
+        _dedupe(validated_questions + fallback.questions), profile
+    )
 
     return SuggestedContent(
         questions=questions[:MAX_QUESTIONS],
-        insights=fallback.insights,
+        insights=suggested.insights if suggested.insights else fallback.insights,
         source="gemini",
     )
 
 
-def _build_suggestions_prompt(profile: dict[str, Any], signals: dict[str, Any] | None = None) -> str:
+def _build_suggestions_prompt(
+    profile: dict[str, Any], signals: dict[str, Any] | None = None
+) -> str:
     profiling_signals = signals or _build_profiling_signals(profile)
     safe_profile = {
         "rows": profile["rows"],
@@ -122,7 +128,9 @@ def _build_suggestions_prompt(profile: dict[str, Any], signals: dict[str, Any] |
         "questions": [
             "Vietnamese question grounded in existing columns only",
         ],
-        "insights": [],
+        "insights": [
+            "Vietnamese insight telling a business story based on the data (min 3, max 5)",
+        ],
     }
     return (
         "Bạn là data analyst assistant cho dữ liệu dạng bảng.\n"
@@ -134,7 +142,9 @@ def _build_suggestions_prompt(profile: dict[str, Any], signals: dict[str, Any] |
         "- Chỉ nhắc tới cột thật trong PROFILE.column_names.\n"
         "- Không tạo câu hỏi vô nghĩa hoặc cần business context không có trong dữ liệu.\n\n"
         "Luật cho insights:\n"
-        "- Không tự tạo insights. Trả insights là mảng rỗng vì backend sẽ tạo deterministic insights từ profiling signals.\n\n"
+        "- Viết 3 đến 5 câu insights cực kỳ sắc bén bằng tiếng Việt dựa trên PROFILE và PROFILING_SIGNALS.\n"
+        "- Khác với thống kê máy móc, mỗi câu insight phải kết hợp nhiều con số để kể một câu chuyện phân tích (ví dụ: thay vì nói 'Missing 687 Cabin', hãy phân tích 'Hơn 77% dữ liệu Cabin bị thiếu, cho thấy việc ghi nhận vị trí buồng phòng rất kém').\n"
+        "- KHÔNG liệt kê các con số khô khan, hãy phân tích ý nghĩa thực tiễn của chúng.\n\n"
         "Chỉ trả về JSON object hợp lệ theo CONTRACT, không markdown.\n\n"
         f"PROFILE={json.dumps(safe_profile, ensure_ascii=False)}\n"
         f"PROFILING_SIGNALS={json.dumps(profiling_signals, ensure_ascii=False)}\n"
@@ -190,12 +200,16 @@ def _build_profiling_signals(
         "numeric_mean_median": _numeric_mean_median_signals(numeric_summary),
         "numeric_ranges": _numeric_range_signals(numeric_summary),
         "top_categories_with_percentage": _top_category_signals(top_categories),
-        "correlation_candidates": _correlation_candidates(dataframe) if dataframe is not None else [],
+        "correlation_candidates": _correlation_candidates(dataframe)
+        if dataframe is not None
+        else [],
         "possible_outliers": _possible_outliers(numeric_summary),
     }
 
 
-def _fallback_suggested_content(profile: dict[str, Any], signals: dict[str, Any] | None = None) -> SuggestedContent:
+def _fallback_suggested_content(
+    profile: dict[str, Any], signals: dict[str, Any] | None = None
+) -> SuggestedContent:
     profiling_signals = signals or _build_profiling_signals(profile)
     questions = _fallback_questions(profile, profiling_signals)
     insights = _fallback_insights(profile, profiling_signals)
@@ -209,7 +223,9 @@ def _fallback_suggested_content(profile: dict[str, Any], signals: dict[str, Any]
 def _fallback_questions(profile: dict[str, Any], signals: dict[str, Any]) -> list[str]:
     numeric_columns = [item["column"] for item in profile.get("numeric_summary", [])]
     categorical_columns = [item["column"] for item in profile.get("top_categories", [])]
-    missing_columns = [item["column"] for item in signals.get("high_missing_columns", [])]
+    missing_columns = [
+        item["column"] for item in signals.get("high_missing_columns", [])
+    ]
     correlation_candidates = signals.get("correlation_candidates", [])
 
     questions: list[str] = []
@@ -225,13 +241,17 @@ def _fallback_questions(profile: dict[str, Any], signals: dict[str, Any]) -> lis
         questions.append(f"Trung bình {metric} theo {group} là bao nhiêu?")
         questions.append(f"Nhóm {group} nào có {metric} trung bình cao nhất?")
     elif numeric_columns:
-        questions.append(f"Giá trị trung bình, min và max của {numeric_columns[0]} là bao nhiêu?")
+        questions.append(
+            f"Giá trị trung bình, min và max của {numeric_columns[0]} là bao nhiêu?"
+        )
 
     if numeric_columns:
         questions.append(f"Phân phối của {numeric_columns[0]} trông như thế nào?")
 
     if categorical_columns:
-        questions.append(f"Giá trị nào xuất hiện nhiều nhất trong cột {categorical_columns[0]}?")
+        questions.append(
+            f"Giá trị nào xuất hiện nhiều nhất trong cột {categorical_columns[0]}?"
+        )
 
     if correlation_candidates:
         candidate = correlation_candidates[0]
@@ -244,7 +264,9 @@ def _fallback_questions(profile: dict[str, Any], signals: dict[str, Any]) -> lis
     return _validate_questions(_dedupe(questions), profile)
 
 
-def _fallback_insights(profile: dict[str, Any], signals: dict[str, Any] | None = None) -> list[str]:
+def _fallback_insights(
+    profile: dict[str, Any], signals: dict[str, Any] | None = None
+) -> list[str]:
     profiling_signals = signals or _build_profiling_signals(profile)
     rows = int(profile.get("rows", 0))
     columns = int(profile.get("columns", 0))
@@ -299,7 +321,9 @@ def _fallback_insights(profile: dict[str, Any], signals: dict[str, Any] | None =
         validated = _validate_insights(
             _dedupe(
                 validated
-                + [f"Dataset có {_format_count(rows)} dòng và {_format_count(columns)} cột."]
+                + [
+                    f"Dataset có {_format_count(rows)} dòng và {_format_count(columns)} cột."
+                ]
             ),
             profile,
         )
@@ -325,8 +349,14 @@ def _validate_questions(questions: list[str], profile: dict[str, Any]) -> list[s
     return _dedupe(validated)
 
 
-def _validate_insights(insights: list[str], profile: dict[str, Any] | None = None) -> list[str]:
-    column_names = {str(column) for column in profile.get("column_names", [])} if profile else set()
+def _validate_insights(
+    insights: list[str], profile: dict[str, Any] | None = None
+) -> list[str]:
+    column_names = (
+        {str(column) for column in profile.get("column_names", [])}
+        if profile
+        else set()
+    )
     validated: list[str] = []
     for insight in insights:
         if not isinstance(insight, str):
@@ -355,8 +385,14 @@ def _contains_generic_without_metric(lowered_text: str) -> bool:
     if not any(phrase in lowered_text for phrase in GENERIC_WORDING):
         return False
     has_metric = bool(re.search(r"\d", lowered_text))
-    has_percent = "%" in lowered_text or "phần trăm" in lowered_text or "phan tram" in lowered_text
-    has_count = any(word in lowered_text for word in ("dòng", "dong", "giá trị", "gia tri", "count"))
+    has_percent = (
+        "%" in lowered_text
+        or "phần trăm" in lowered_text
+        or "phan tram" in lowered_text
+    )
+    has_count = any(
+        word in lowered_text for word in ("dòng", "dong", "giá trị", "gia tri", "count")
+    )
     return not (has_metric and (has_percent or has_count))
 
 
@@ -385,8 +421,12 @@ def _mentions_unknown_structured_column(text: str, column_names: set[str]) -> bo
     return False
 
 
-def _numeric_mean_median_signals(numeric_summary: list[dict[str, Any]]) -> list[dict[str, object]]:
-    items = [_numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)]
+def _numeric_mean_median_signals(
+    numeric_summary: list[dict[str, Any]],
+) -> list[dict[str, object]]:
+    items = [
+        _numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)
+    ]
     return [
         {
             "column": item["column"],
@@ -398,8 +438,12 @@ def _numeric_mean_median_signals(numeric_summary: list[dict[str, Any]]) -> list[
     ]
 
 
-def _numeric_range_signals(numeric_summary: list[dict[str, Any]]) -> list[dict[str, object]]:
-    items = [_numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)]
+def _numeric_range_signals(
+    numeric_summary: list[dict[str, Any]],
+) -> list[dict[str, object]]:
+    items = [
+        _numeric_signal(item) for item in numeric_summary if _has_numeric_range(item)
+    ]
     return [
         {
             "column": item["column"],
@@ -444,7 +488,9 @@ def _numeric_salience(item: dict[str, Any]) -> float:
     return range_width
 
 
-def _top_category_signals(top_categories: list[dict[str, Any]]) -> list[dict[str, object]]:
+def _top_category_signals(
+    top_categories: list[dict[str, Any]],
+) -> list[dict[str, object]]:
     signals = []
     for item in top_categories:
         if not item.get("values"):
@@ -492,10 +538,14 @@ def _correlation_candidates(dataframe: pd.DataFrame) -> list[dict[str, object]]:
                 }
             )
 
-    return sorted(candidates, key=lambda item: float(item["abs_correlation"]), reverse=True)[:5]
+    return sorted(
+        candidates, key=lambda item: float(item["abs_correlation"]), reverse=True
+    )[:5]
 
 
-def _possible_outliers(numeric_summary: list[dict[str, Any]]) -> list[dict[str, object]]:
+def _possible_outliers(
+    numeric_summary: list[dict[str, Any]],
+) -> list[dict[str, object]]:
     outliers: list[dict[str, object]] = []
     for item in numeric_summary:
         p25 = item.get("p25")
@@ -539,7 +589,9 @@ def _correlation_strength(coefficient: float) -> str:
     return "không đáng kể"
 
 
-def _find_signal_by_column(items: list[dict[str, Any]], column: str) -> dict[str, Any] | None:
+def _find_signal_by_column(
+    items: list[dict[str, Any]], column: str
+) -> dict[str, Any] | None:
     for item in items:
         if str(item.get("column")) == column:
             return item

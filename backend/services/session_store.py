@@ -2,10 +2,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from threading import RLock
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 import pandas as pd
+
+
+class PendingClarification(TypedDict, total=False):
+    intent: str
+    original_question: str
+    metric_column: str | None
+    group_by: str | None
+    chart_type: str | None
+    operation: str | None
+    columns: list[str] | None
 
 
 @dataclass
@@ -15,12 +25,15 @@ class DatasetSession:
     filename: str
     dataframe: pd.DataFrame
     chat_history: list[dict[str, object]] = field(default_factory=list)
-    pending_clarification: dict[str, object] | None = None
+    pending_clarification: PendingClarification | None = None
     profile_cache: dict[str, object] | None = None
     suggestions_cache: Any | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_accessed_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    _lock: RLock = field(default_factory=RLock, init=False, compare=False, repr=False)
 
 
 class InMemorySessionStore:
@@ -62,12 +75,16 @@ class InMemorySessionStore:
             session.expires_at = now + timedelta(seconds=self._ttl_seconds)
             return session
 
-    def verify_access(self, session: DatasetSession, token: str | None, required: bool) -> bool:
+    def verify_access(
+        self, session: DatasetSession, token: str | None, required: bool
+    ) -> bool:
         if not required:
             return True
         return bool(token) and token == session.access_token
 
-    def add_chat_turn(self, session_id: str, question: str, answer: str, route: str) -> None:
+    def add_chat_turn(
+        self, session_id: str, question: str, answer: str, route: str
+    ) -> None:
         session = self.get(session_id)
         if session is None:
             return
@@ -81,7 +98,9 @@ class InMemorySessionStore:
                 }
             )
 
-    def set_pending_clarification(self, session_id: str, pending: dict[str, object] | None) -> None:
+    def set_pending_clarification(
+        self, session_id: str, pending: dict[str, object] | None
+    ) -> None:
         session = self.get(session_id)
         if session is None:
             return

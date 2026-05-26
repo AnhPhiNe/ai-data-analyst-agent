@@ -7,20 +7,28 @@ from backend.tools.safe_pandas import ToolResult
 
 
 def build_answer(question: str, tool_result: ToolResult) -> str:
-    if tool_result.tool_name == "profile_dataset" and isinstance(tool_result.data, dict):
+    if tool_result.tool_name == "profile_dataset" and isinstance(
+        tool_result.data, dict
+    ):
         rows = tool_result.data.get("rows")
         columns = tool_result.data.get("columns")
         return f"Dữ liệu hiện có {_format_number(rows)} dòng và {_format_number(columns)} cột."
 
     if tool_result.tool_name == "list_columns" and isinstance(tool_result.data, dict):
         columns = tool_result.data.get("columns", [])
-        return "Dataset có các cột: " + ", ".join(str(column) for column in columns) + "."
+        return (
+            "Dataset có các cột: " + ", ".join(str(column) for column in columns) + "."
+        )
 
     if tool_result.tool_name == "detect_missing_values":
-        missing_rows = [row for row in tool_result.table or [] if row.get("missing_count", 0) > 0]
+        missing_rows = [
+            row for row in tool_result.table or [] if row.get("missing_count", 0) > 0
+        ]
         if not missing_rows:
             return "Dữ liệu không có giá trị thiếu trong các cột đã kiểm tra."
-        details = ", ".join(f"{row['column']}: {row['missing_count']}" for row in missing_rows)
+        details = ", ".join(
+            f"{row['column']}: {row['missing_count']}" for row in missing_rows
+        )
         return f"Dữ liệu có giá trị thiếu ở các cột sau: {details}."
 
     if tool_result.tool_name == "describe_numeric":
@@ -33,7 +41,9 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
         if answer:
             return answer
 
-    if tool_result.tool_name == "conditional_percentage" and isinstance(tool_result.data, dict):
+    if tool_result.tool_name == "conditional_percentage" and isinstance(
+        tool_result.data, dict
+    ):
         column = tool_result.data.get("column")
         condition = _condition_answer_label(
             str(column),
@@ -115,7 +125,9 @@ def validation_clarification_message(tool_name: str, validation_message: str) ->
             f"Cột được chọn chưa phù hợp cho phân tích numeric: {validation_message} "
             "Bạn hãy chọn một cột số khác."
         )
-    return f"Mình chưa thể chạy `{tool_name}` vì tham số chưa hợp lệ: {validation_message}"
+    return (
+        f"Mình chưa thể chạy `{tool_name}` vì tham số chưa hợp lệ: {validation_message}"
+    )
 
 
 def _aggregate_metric_answer(table: list[dict[str, Any]]) -> str | None:
@@ -159,7 +171,14 @@ def _describe_numeric_answer(question: str, table: list[dict[str, Any]]) -> str 
     min_value = row.get("min")
     max_value = row.get("max")
     count = row.get("count")
-    suffix = "%" if any(token in normalized for token in ("ty le phan tram", "phan tram", "percent", "percentage")) else ""
+    suffix = (
+        "%"
+        if any(
+            token in normalized
+            for token in ("ty le phan tram", "phan tram", "percent", "percentage")
+        )
+        else ""
+    )
 
     if any(token in normalized for token in ("trung binh", "average", "mean", "avg")):
         return f"{column} trung bình là {_format_number(mean)}{suffix} trên {_format_number(count)} giá trị hợp lệ."

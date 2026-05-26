@@ -6,7 +6,11 @@ import re
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
-from backend.agent.column_resolver import contains_normalized_column, normalize_text, resolve_column
+from backend.agent.column_resolver import (
+    contains_normalized_column,
+    normalize_text,
+    resolve_column,
+)
 from backend.services.session_store import DatasetSession
 
 
@@ -14,7 +18,9 @@ def find_mentioned_numeric_column(session: DatasetSession, question: str) -> str
     normalized_question = _normalize_text(question)
     for column in session.dataframe.columns:
         column_name = str(column)
-        if not is_numeric_dtype(session.dataframe[column_name]) or is_bool_dtype(session.dataframe[column_name]):
+        if not is_numeric_dtype(session.dataframe[column_name]) or is_bool_dtype(
+            session.dataframe[column_name]
+        ):
             continue
         normalized_column = _normalize_text(column_name.replace("_", " "))
         if _contains_normalized_column(normalized_question, normalized_column):
@@ -26,7 +32,9 @@ def find_mentioned_numeric_column(session: DatasetSession, question: str) -> str
     return None
 
 
-def correlation_target_issue(session: DatasetSession, question: str, tool_name: str) -> str | None:
+def correlation_target_issue(
+    session: DatasetSession, question: str, tool_name: str
+) -> str | None:
     if tool_name != "correlation_analysis":
         return None
 
@@ -56,7 +64,9 @@ def correlation_answer(question: str, table: list[dict[str, Any]]) -> str | None
     if target_column is None:
         return "Đã tính xong ma trận tương quan cho các cột numeric đã chọn."
 
-    target_row = next((row for row in table if row.get("column") == target_column), None)
+    target_row = next(
+        (row for row in table if row.get("column") == target_column), None
+    )
     if target_row is None:
         return None
 
@@ -64,7 +74,11 @@ def correlation_answer(question: str, table: list[dict[str, Any]]) -> str | None
     for column, value in target_row.items():
         if column == "column" or column == target_column:
             continue
-        if isinstance(value, int | float) and not isinstance(value, bool) and not math.isnan(float(value)):
+        if (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and not math.isnan(float(value))
+        ):
             candidates.append((column, float(value)))
 
     if not candidates:
@@ -73,12 +87,19 @@ def correlation_answer(question: str, table: list[dict[str, Any]]) -> str | None
     normalized_question = _normalize_text(question)
     if _asks_for_negative_correlation(normalized_question):
         negative_candidates = sorted(
-            [(column, coefficient) for column, coefficient in candidates if coefficient < 0],
+            [
+                (column, coefficient)
+                for column, coefficient in candidates
+                if coefficient < 0
+            ],
             key=lambda item: item[1],
         )
         if not negative_candidates:
             return f"Không có cột numeric nào có tương quan âm với '{target_column}' trong các cột đã kiểm tra."
-        details = ", ".join(f"{column} (r={coefficient:.3f})" for column, coefficient in negative_candidates)
+        details = ", ".join(
+            f"{column} (r={coefficient:.3f})"
+            for column, coefficient in negative_candidates
+        )
         return (
             f"Các cột có tương quan âm với '{target_column}' là: {details}. "
             "Lưu ý: tương quan không khẳng định quan hệ nhân quả."
@@ -86,13 +107,20 @@ def correlation_answer(question: str, table: list[dict[str, Any]]) -> str | None
 
     if _asks_for_positive_correlation(normalized_question):
         positive_candidates = sorted(
-            [(column, coefficient) for column, coefficient in candidates if coefficient > 0],
+            [
+                (column, coefficient)
+                for column, coefficient in candidates
+                if coefficient > 0
+            ],
             key=lambda item: item[1],
             reverse=True,
         )
         if not positive_candidates:
             return f"Không có cột numeric nào có tương quan dương với '{target_column}' trong các cột đã kiểm tra."
-        details = ", ".join(f"{column} (r={coefficient:.3f})" for column, coefficient in positive_candidates)
+        details = ", ".join(
+            f"{column} (r={coefficient:.3f})"
+            for column, coefficient in positive_candidates
+        )
         return (
             f"Các cột có tương quan dương với '{target_column}' là: {details}. "
             "Lưu ý: tương quan không khẳng định quan hệ nhân quả."
@@ -109,7 +137,10 @@ def correlation_answer(question: str, table: list[dict[str, Any]]) -> str | None
 
 def _extract_correlation_target_phrase(question: str) -> str | None:
     normalized = _normalize_text(question)
-    if not any(phrase in normalized for phrase in ("tuong quan", "lien quan", "correlation", "related")):
+    if not any(
+        phrase in normalized
+        for phrase in ("tuong quan", "lien quan", "correlation", "related")
+    ):
         return None
 
     explicit_target = _extract_explicit_target_phrase(normalized)
@@ -119,7 +150,9 @@ def _extract_correlation_target_phrase(question: str) -> str | None:
     for marker in (" voi ", " with ", " to "):
         if marker in f" {normalized} ":
             target = f" {normalized} ".split(marker, 1)[1].strip()
-            target = re.sub(r"\b(nhat|manh nhat|cao nhat|khong|khong)\b", "", target).strip()
+            target = re.sub(
+                r"\b(nhat|manh nhat|cao nhat|khong|khong)\b", "", target
+            ).strip()
             if target and not _is_generic_correlation_target_phrase(target):
                 return target
     return None
@@ -173,7 +206,8 @@ def _find_close_numeric_column(session: DatasetSession, phrase: str) -> str | No
     numeric_columns = [
         str(column)
         for column in session.dataframe.columns
-        if is_numeric_dtype(session.dataframe[str(column)]) and not is_bool_dtype(session.dataframe[str(column)])
+        if is_numeric_dtype(session.dataframe[str(column)])
+        and not is_bool_dtype(session.dataframe[str(column)])
     ]
     resolved = resolve_column(session.dataframe, phrase, expected_type="numeric")
     if resolved is not None:
@@ -181,7 +215,9 @@ def _find_close_numeric_column(session: DatasetSession, phrase: str) -> str | No
     return _find_close_column_name(phrase, numeric_columns)
 
 
-def _find_target_in_correlation_table(question: str, table: list[dict[str, Any]]) -> str | None:
+def _find_target_in_correlation_table(
+    question: str, table: list[dict[str, Any]]
+) -> str | None:
     normalized_question = _normalize_text(question)
     columns = [str(row.get("column")) for row in table if row.get("column") is not None]
     for column in columns:
@@ -199,11 +235,17 @@ def _find_target_in_correlation_table(question: str, table: list[dict[str, Any]]
 
 
 def _asks_for_negative_correlation(normalized_question: str) -> bool:
-    return any(token in normalized_question for token in ("tuong quan am", "correlation am", "negative correlation"))
+    return any(
+        token in normalized_question
+        for token in ("tuong quan am", "correlation am", "negative correlation")
+    )
 
 
 def _asks_for_positive_correlation(normalized_question: str) -> bool:
-    return any(token in normalized_question for token in ("tuong quan duong", "correlation duong", "positive correlation"))
+    return any(
+        token in normalized_question
+        for token in ("tuong quan duong", "correlation duong", "positive correlation")
+    )
 
 
 def _contains_normalized_column(normalized_text: str, normalized_column: str) -> bool:
@@ -213,7 +255,9 @@ def _contains_normalized_column(normalized_text: str, normalized_column: str) ->
 def _find_close_column_name(phrase: str, columns: list[str]) -> str | None:
     normalized_phrase = _normalize_text(phrase)
     lookup = {_normalize_text(column.replace("_", " ")): column for column in columns}
-    matches = difflib.get_close_matches(normalized_phrase, list(lookup), n=1, cutoff=0.86)
+    matches = difflib.get_close_matches(
+        normalized_phrase, list(lookup), n=1, cutoff=0.86
+    )
     if not matches:
         return None
     return lookup[matches[0]]

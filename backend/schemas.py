@@ -111,4 +111,5 @@ class AutoAnalysisResponse(BaseModel):
     categorical_highlights: list[dict[str, object]]
     correlation_highlights: list[dict[str, object]]
     recommended_charts: list[dict[str, object]]
+    ai_status: dict[str, object] | None = None
     next_questions: list[str]

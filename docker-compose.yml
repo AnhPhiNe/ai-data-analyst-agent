@@ -1,11 +1,22 @@
 services:
-  ai-data-analyst-agent:
+  backend:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+
+  frontend:
+    build: .
+    command: streamlit run frontend/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    ports:
       - "8501:8501"
+    depends_on:
+      - backend
     env_file:
       - path: .env
         required: false
     environment:
-      BACKEND_URL: http://localhost:8000
+      BACKEND_URL: http://backend:8000
+

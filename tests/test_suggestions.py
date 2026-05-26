@@ -13,22 +13,9 @@ from backend.agent.suggestions import (
 )
 from backend.main import app
 from backend.services.profiling import profile_dataset
-from backend.services.session_store import session_store
 
 
-class FakeProvider:
-    def __init__(self, response: str) -> None:
-        self.response = response
-        self.prompts: list[str] = []
-
-    def generate(self, prompt: str) -> str:
-        self.prompts.append(prompt)
-        return self.response
-
-
-@pytest.fixture(autouse=True)
-def clear_session_store() -> None:
-    session_store.clear()
+from tests.conftest import FakeProvider
 
 
 def _sample_dataframe() -> pd.DataFrame:
@@ -97,14 +84,21 @@ def test_fallback_insights_are_grounded_with_numbers() -> None:
         "department: missing 1" in insight and "25%" in insight
         for insight in suggested.insights
     )
-    assert any("mean=" in insight and "median=" in insight and "min-max=" in insight for insight in suggested.insights)
     assert any(
-        'department="Engineering"' in insight and "2 dòng" in insight and "50%" in insight
+        "mean=" in insight and "median=" in insight and "min-max=" in insight
+        for insight in suggested.insights
+    )
+    assert any(
+        'department="Engineering"' in insight
+        and "2 dòng" in insight
+        and "50%" in insight
         for insight in suggested.insights
     )
 
 
-def test_generate_suggested_content_uses_gemini_and_filters_unknown_structured_columns() -> None:
+def test_generate_suggested_content_uses_gemini_and_filters_unknown_structured_columns() -> (
+    None
+):
     provider = FakeProvider(
         '{"questions":["Tính trung bình salary theo department.","Mô tả Unknown_Column."],'
         '"insights":["Cột salary có trung bình 1200, dao động từ 900 đến 1500."]}'
@@ -193,7 +187,9 @@ def test_suggested_questions_are_schema_grounded_and_diverse() -> None:
 
 def test_correlation_signal_and_insight_when_two_numeric_columns_exist() -> None:
     suggested = generate_suggested_content(_sample_dataframe(), provider=None)
-    signals = _build_profiling_signals(profile_dataset(_sample_dataframe()), _sample_dataframe())
+    signals = _build_profiling_signals(
+        profile_dataset(_sample_dataframe()), _sample_dataframe()
+    )
 
     assert signals["correlation_candidates"]
     assert any(" vs " in insight and "r=" in insight for insight in suggested.insights)
@@ -203,11 +199,18 @@ def test_student_like_dataset_returns_five_meaningful_deterministic_insights() -
     suggested = generate_suggested_content(_student_like_dataframe(), provider=None)
 
     assert len(suggested.insights) == 5
-    assert any("Parental_Education_Level: missing" in insight for insight in suggested.insights)
-    assert any("mean=" in insight and "min-max=" in insight for insight in suggested.insights)
+    assert any(
+        "Parental_Education_Level: missing" in insight for insight in suggested.insights
+    )
+    assert any(
+        "mean=" in insight and "min-max=" in insight for insight in suggested.insights
+    )
     assert any('Internet_Access="Yes"' in insight for insight in suggested.insights)
     assert any("bất thường" in insight for insight in suggested.insights)
-    assert any("Attendance vs Exam_Score" in insight and "r=" in insight for insight in suggested.insights)
+    assert any(
+        "Attendance vs Exam_Score" in insight and "r=" in insight
+        for insight in suggested.insights
+    )
 
 
 def test_weak_correlation_is_not_highlighted() -> None:
@@ -256,7 +259,9 @@ def test_gemini_prompt_hardens_insight_contract() -> None:
     assert "correlation_candidates" in prompt
 
 
-def test_suggestions_endpoint_returns_fallback_content(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_suggestions_endpoint_returns_fallback_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
     monkeypatch.setattr(main_module, "get_llm_provider", lambda: None)
@@ -272,7 +277,9 @@ def test_suggestions_endpoint_returns_fallback_content(monkeypatch: pytest.Monke
     assert all(re.search(r"\d", insight) for insight in payload["insights"])
 
 
-def test_suggestions_endpoint_uses_mock_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_suggestions_endpoint_uses_mock_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
     provider = FakeProvider(
@@ -286,7 +293,10 @@ def test_suggestions_endpoint_uses_mock_provider(monkeypatch: pytest.MonkeyPatch
     assert response.status_code == 200
     payload = response.json()
     assert payload["source"] == "gemini"
-    assert payload["questions"][0] == "Giá trị nào xuất hiện nhiều nhất trong cột department?"
+    assert (
+        payload["questions"][0]
+        == "Giá trị nào xuất hiện nhiều nhất trong cột department?"
+    )
     assert len(payload["questions"]) > 1
     assert all(re.search(r"\d", insight) for insight in payload["insights"])
     assert not any("đứng hạng 1" in insight for insight in payload["insights"])

@@ -18,13 +18,17 @@ def repair_tool_column_arguments(
     repaired = dict(arguments)
     if tool_name == "generate_chart_spec":
         _normalize_chart_argument_aliases(repaired)
+        _repair_chart_column_arguments(dataframe, repaired)
+        return repaired
 
     if tool_name == "describe_numeric":
         _repair_column_key(dataframe, repaired, "column", expected_type="numeric")
     elif tool_name == "value_counts":
         _repair_column_key(dataframe, repaired, "column")
     elif tool_name == "aggregate_metric":
-        _repair_column_key(dataframe, repaired, "metric_column", expected_type="numeric")
+        _repair_column_key(
+            dataframe, repaired, "metric_column", expected_type="numeric"
+        )
         _repair_column_key(dataframe, repaired, "group_by", expected_type="categorical")
     elif tool_name == "sort_values":
         _repair_column_key(dataframe, repaired, "column")
@@ -34,8 +38,6 @@ def repair_tool_column_arguments(
         _repair_column_key(dataframe, repaired, "column", expected_type=expected_type)
     elif tool_name == "correlation_analysis":
         _repair_column_list(dataframe, repaired, "columns", expected_type="numeric")
-    elif tool_name == "generate_chart_spec":
-        _repair_chart_column_arguments(dataframe, repaired)
     return repaired
 
 
@@ -61,7 +63,9 @@ def _normalize_chart_argument_aliases(arguments: dict[str, Any]) -> None:
             arguments.pop(alias, None)
 
 
-def _repair_chart_column_arguments(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> None:
+def _repair_chart_column_arguments(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> None:
     chart_type = str(arguments.get("chart_type", "")).lower()
     if chart_type == "histogram":
         _repair_column_key(dataframe, arguments, "x", expected_type="numeric")
@@ -109,7 +113,9 @@ def _repair_column_list(
 
     repaired_values = []
     for value in values:
-        resolved = _resolve_argument_column(dataframe, value, expected_type=expected_type)
+        resolved = _resolve_argument_column(
+            dataframe, value, expected_type=expected_type
+        )
         repaired_values.append(resolved if resolved is not None else value)
     arguments[key] = repaired_values
 

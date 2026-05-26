@@ -131,12 +131,16 @@ def normalize_identifier(identifier: str) -> str:
     return normalize_text(identifier.replace("_", " "))
 
 
-def _candidate_columns(dataframe: pd.DataFrame, expected_type: ExpectedType | None) -> list[str]:
+def _candidate_columns(
+    dataframe: pd.DataFrame, expected_type: ExpectedType | None
+) -> list[str]:
     columns = [str(column) for column in dataframe.columns]
     if expected_type == "numeric":
         return [column for column in columns if _is_numeric_column(dataframe, column)]
     if expected_type == "categorical":
-        return [column for column in columns if not _is_numeric_column(dataframe, column)]
+        return [
+            column for column in columns if not _is_numeric_column(dataframe, column)
+        ]
     return columns
 
 
@@ -151,13 +155,19 @@ def _score_column(column: str, normalized_text: str) -> float:
 
     column_terms = _column_terms(normalized_column)
     if column_terms:
-        matched_terms = sum(1 for term in column_terms if _term_in_text(term, normalized_text))
+        matched_terms = sum(
+            1 for term in column_terms if _term_in_text(term, normalized_text)
+        )
         token_score = matched_terms / len(column_terms)
         best_score = max(best_score, token_score)
-    best_score = max(best_score, _column_token_score(normalized_column, normalized_text))
+    best_score = max(
+        best_score, _column_token_score(normalized_column, normalized_text)
+    )
 
     for phrase in _text_phrases(normalized_text):
-        phrase_score = difflib.SequenceMatcher(None, phrase.replace(" ", ""), compact_column).ratio()
+        phrase_score = difflib.SequenceMatcher(
+            None, phrase.replace(" ", ""), compact_column
+        ).ratio()
         best_score = max(best_score, phrase_score)
 
     return best_score

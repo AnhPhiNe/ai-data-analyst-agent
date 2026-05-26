@@ -5,7 +5,10 @@ import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
 from backend.tools.safe_pandas import DANGEROUS_ARG_KEYS, TOOL_REGISTRY
-from backend.visualization.chart_specs import ChartSpecValidationError, validate_chart_spec
+from backend.visualization.chart_specs import (
+    ChartSpecValidationError,
+    validate_chart_spec,
+)
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,9 @@ class ToolCallValidationResult:
     normalized_arguments: dict[str, Any] = field(default_factory=dict)
 
 
-def validate_tool_call(dataframe: pd.DataFrame, tool_name: str, arguments: Any) -> ToolCallValidationResult:
+def validate_tool_call(
+    dataframe: pd.DataFrame, tool_name: str, arguments: Any
+) -> ToolCallValidationResult:
     if tool_name not in TOOL_REGISTRY:
         return _invalid(f"Tool '{tool_name}' is not allowed.")
 
@@ -27,7 +32,9 @@ def validate_tool_call(dataframe: pd.DataFrame, tool_name: str, arguments: Any) 
         return _invalid(f"Argument key '{dangerous_key}' is not allowed.")
 
     try:
-        normalized_arguments = _validate_tool_specific_arguments(dataframe, tool_name, arguments)
+        normalized_arguments = _validate_tool_specific_arguments(
+            dataframe, tool_name, arguments
+        )
     except ValueError as exc:
         return _invalid(str(exc))
 
@@ -60,7 +67,10 @@ def _validate_tool_specific_arguments(
     if tool_name == "value_counts":
         column = _required_string(arguments, "column")
         _require_column(dataframe, column)
-        return {"column": column, "top_n": _bounded_int(arguments.get("top_n", 10), "top_n", 1, 50)}
+        return {
+            "column": column,
+            "top_n": _bounded_int(arguments.get("top_n", 10), "top_n", 1, 50),
+        }
 
     if tool_name == "aggregate_metric":
         metric_column = _required_string(arguments, "metric_column")
@@ -116,13 +126,17 @@ def _validate_tool_specific_arguments(
         columns = arguments.get("columns")
         if columns is None:
             columns = _numeric_columns(dataframe)
-        if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns):
+        if not isinstance(columns, list) or not all(
+            isinstance(column, str) for column in columns
+        ):
             raise ValueError("'columns' must be a list of column names.")
         for column in columns:
             _require_column(dataframe, column)
             _require_numeric(dataframe, column)
         if len(columns) < 2:
-            raise ValueError("Correlation analysis requires at least two numeric columns.")
+            raise ValueError(
+                "Correlation analysis requires at least two numeric columns."
+            )
         return {"columns": columns}
 
     if tool_name == "generate_chart_spec":

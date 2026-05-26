@@ -17,15 +17,15 @@ def _sample_dataframe() -> pd.DataFrame:
 def test_repairs_single_column_arguments() -> None:
     dataframe = _sample_dataframe()
 
-    assert repair_tool_column_arguments(dataframe, "describe_numeric", {"column": "diem"}) == {
-        "column": "performance_score"
-    }
-    assert repair_tool_column_arguments(dataframe, "value_counts", {"column": "phong ban"}) == {
-        "column": "department"
-    }
-    assert repair_tool_column_arguments(dataframe, "sort_values", {"column": "doanh thu"}) == {
-        "column": "Monthly_Revenue"
-    }
+    assert repair_tool_column_arguments(
+        dataframe, "describe_numeric", {"column": "diem"}
+    ) == {"column": "performance_score"}
+    assert repair_tool_column_arguments(
+        dataframe, "value_counts", {"column": "phong ban"}
+    ) == {"column": "department"}
+    assert repair_tool_column_arguments(
+        dataframe, "sort_values", {"column": "doanh thu"}
+    ) == {"column": "Monthly_Revenue"}
 
 
 def test_repairs_aggregate_metric_arguments() -> None:
@@ -81,6 +81,6 @@ def test_repairs_chart_axis_aliases_from_llm() -> None:
 
 
 def test_leaves_unresolved_columns_for_validation_to_reject() -> None:
-    assert repair_tool_column_arguments(_sample_dataframe(), "describe_numeric", {"column": "unknown"}) == {
-        "column": "unknown"
-    }
+    assert repair_tool_column_arguments(
+        _sample_dataframe(), "describe_numeric", {"column": "unknown"}
+    ) == {"column": "unknown"}

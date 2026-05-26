@@ -50,7 +50,13 @@ def test_list_columns_returns_columns_and_dtypes() -> None:
 
     assert result.status == "success"
     assert result.data == {
-        "columns": ["department", "salary", "tenure_years", "performance_score", "is_manager"]
+        "columns": [
+            "department",
+            "salary",
+            "tenure_years",
+            "performance_score",
+            "is_manager",
+        ]
     }
     assert result.table[0] == {"column": "department", "dtype": "object"}
 
@@ -82,7 +88,9 @@ def test_describe_numeric_for_one_column() -> None:
 
 
 def test_describe_numeric_rejects_non_numeric_column() -> None:
-    result = execute_tool(_sample_dataframe(), "describe_numeric", {"column": "department"})
+    result = execute_tool(
+        _sample_dataframe(), "describe_numeric", {"column": "department"}
+    )
 
     assert result.status == "error"
     assert "must be numeric" in result.message
@@ -93,11 +101,17 @@ def test_detect_missing_values_returns_all_columns() -> None:
 
     assert result.status == "success"
     salary_row = next(row for row in result.table if row["column"] == "salary")
-    assert salary_row == {"column": "salary", "missing_count": 1, "missing_percent": 20.0}
+    assert salary_row == {
+        "column": "salary",
+        "missing_count": 1,
+        "missing_percent": 20.0,
+    }
 
 
 def test_value_counts_returns_top_categories() -> None:
-    result = execute_tool(_sample_dataframe(), "value_counts", {"column": "department", "top_n": 2})
+    result = execute_tool(
+        _sample_dataframe(), "value_counts", {"column": "department", "top_n": 2}
+    )
 
     assert result.status == "success"
     assert result.table == [
@@ -129,14 +143,22 @@ def test_aggregate_metric_rejects_missing_column() -> None:
 
 
 def test_sort_values_returns_ordered_rows() -> None:
-    result = execute_tool(_sample_dataframe(), "sort_values", {"column": "salary", "ascending": False, "limit": 2})
+    result = execute_tool(
+        _sample_dataframe(),
+        "sort_values",
+        {"column": "salary", "ascending": False, "limit": 2},
+    )
 
     assert result.status == "success"
     assert [row["salary"] for row in result.table] == [1500.0, 1200.0]
 
 
 def test_filter_rows_supports_numeric_operator() -> None:
-    result = execute_tool(_sample_dataframe(), "filter_rows", {"column": "salary", "operator": "gt", "value": 1000})
+    result = execute_tool(
+        _sample_dataframe(),
+        "filter_rows",
+        {"column": "salary", "operator": "gt", "value": 1000},
+    )
 
     assert result.status == "success"
     assert result.data == {"matched_rows": 2, "returned_rows": 2, "total_rows": 5}
@@ -210,7 +232,9 @@ def test_generate_chart_spec_rejects_scatter_with_non_numeric_x() -> None:
 
 
 def test_generate_chart_spec_rejects_high_cardinality_pie() -> None:
-    dataframe = pd.DataFrame({"category": [f"item_{index}" for index in range(11)], "amount": range(11)})
+    dataframe = pd.DataFrame(
+        {"category": [f"item_{index}" for index in range(11)], "amount": range(11)}
+    )
 
     result = execute_tool(
         dataframe,

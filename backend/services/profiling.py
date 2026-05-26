@@ -17,7 +17,9 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def dataframe_preview(dataframe: pd.DataFrame, limit: int = 10) -> list[dict[str, object]]:
+def dataframe_preview(
+    dataframe: pd.DataFrame, limit: int = 10
+) -> list[dict[str, object]]:
     preview_frame = dataframe.head(limit).astype(object)
     preview_frame = preview_frame.where(pd.notna(preview_frame), None)
     return preview_frame.to_dict(orient="records")
@@ -37,7 +39,9 @@ def profile_dataset(dataframe: pd.DataFrame) -> dict[str, object]:
         "column_names": list_columns(dataframe),
         "preview": dataframe_preview(dataframe),
         "dtypes": column_profiles,
-        "missing_values": [profile for profile in column_profiles if profile["missing_count"] > 0],
+        "missing_values": [
+            profile for profile in column_profiles if profile["missing_count"] > 0
+        ],
         "numeric_summary": _numeric_summary(dataframe),
         "top_categories": _top_categories(dataframe),
         "distributions": _distribution_specs(dataframe),
@@ -50,7 +54,9 @@ def _column_profiles(dataframe: pd.DataFrame) -> list[dict[str, object]]:
 
     for column in dataframe.columns:
         missing_count = int(dataframe[column].isna().sum())
-        missing_percent = round((missing_count / row_count * 100) if row_count else 0.0, 2)
+        missing_percent = round(
+            (missing_count / row_count * 100) if row_count else 0.0, 2
+        )
         profiles.append(
             {
                 "name": str(column),
@@ -70,7 +76,11 @@ def _numeric_summary(dataframe: pd.DataFrame) -> list[dict[str, object]]:
 
     for column in numeric_columns:
         series = dataframe[column].dropna()
-        quantiles = series.quantile([0.25, 0.5, 0.75]) if not series.empty else pd.Series(dtype=float)
+        quantiles = (
+            series.quantile([0.25, 0.5, 0.75])
+            if not series.empty
+            else pd.Series(dtype=float)
+        )
         summaries.append(
             {
                 "column": str(column),
@@ -88,7 +98,9 @@ def _numeric_summary(dataframe: pd.DataFrame) -> list[dict[str, object]]:
     return summaries
 
 
-def _top_categories(dataframe: pd.DataFrame, max_values: int = 5) -> list[dict[str, object]]:
+def _top_categories(
+    dataframe: pd.DataFrame, max_values: int = 5
+) -> list[dict[str, object]]:
     categories: list[dict[str, object]] = []
     row_count = len(dataframe)
 
@@ -108,7 +120,9 @@ def _top_categories(dataframe: pd.DataFrame, max_values: int = 5) -> list[dict[s
                     {
                         "value": str(value),
                         "count": int(count),
-                        "percent": round((int(count) / row_count * 100) if row_count else 0.0, 2),
+                        "percent": round(
+                            (int(count) / row_count * 100) if row_count else 0.0, 2
+                        ),
                     }
                     for value, count in value_counts.items()
                 ],
@@ -137,19 +151,27 @@ def _distribution_specs(dataframe: pd.DataFrame) -> list[dict[str, object]]:
     return specs
 
 
-def _numeric_distribution_spec(column: str, series: pd.Series) -> dict[str, object] | None:
+def _numeric_distribution_spec(
+    column: str, series: pd.Series
+) -> dict[str, object] | None:
     unique_count = int(series.nunique())
     if unique_count == 0:
         return None
 
     if unique_count <= 10:
         counts = series.value_counts().sort_index()
-        data = [{"bin": str(_json_safe(value)), "count": int(count)} for value, count in counts.items()]
+        data = [
+            {"bin": str(_json_safe(value)), "count": int(count)}
+            for value, count in counts.items()
+        ]
     else:
         bins = min(10, unique_count)
         bucketed = pd.cut(series, bins=bins, duplicates="drop")
         counts = bucketed.value_counts().sort_index()
-        data = [{"bin": str(interval), "count": int(count)} for interval, count in counts.items()]
+        data = [
+            {"bin": str(interval), "count": int(count)}
+            for interval, count in counts.items()
+        ]
 
     return {
         "chart_type": "histogram",
@@ -160,7 +182,9 @@ def _numeric_distribution_spec(column: str, series: pd.Series) -> dict[str, obje
     }
 
 
-def _category_distribution_spec(column: str, series: pd.Series) -> dict[str, object] | None:
+def _category_distribution_spec(
+    column: str, series: pd.Series
+) -> dict[str, object] | None:
     counts = series.astype(str).value_counts().head(10)
     if counts.empty:
         return None
@@ -170,7 +194,10 @@ def _category_distribution_spec(column: str, series: pd.Series) -> dict[str, obj
         "column": column,
         "x_label": column,
         "y_label": "Count",
-        "data": [{"category": str(value), "count": int(count)} for value, count in counts.items()],
+        "data": [
+            {"category": str(value), "count": int(count)}
+            for value, count in counts.items()
+        ],
     }
 
 

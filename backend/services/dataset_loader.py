@@ -19,11 +19,15 @@ def validate_upload(filename: str, content: bytes, max_upload_mb: int) -> None:
     if not filename:
         raise DatasetLoadError("Missing filename.")
     if suffix not in ALLOWED_EXTENSIONS:
-        raise DatasetLoadError("Unsupported file type. Please upload a CSV or XLSX file.")
+        raise DatasetLoadError(
+            "Unsupported file type. Please upload a CSV or XLSX file."
+        )
     if not content:
         raise DatasetLoadError("Uploaded file is empty.")
     if len(content) > max_bytes:
-        raise DatasetLoadError(f"File is too large. Maximum upload size is {max_upload_mb} MB.")
+        raise DatasetLoadError(
+            f"File is too large. Maximum upload size is {max_upload_mb} MB."
+        )
 
 
 def load_dataframe(
@@ -46,16 +50,22 @@ def load_dataframe(
     except EmptyDataError as exc:
         raise DatasetLoadError("Uploaded file has no readable rows.") from exc
     except (ParserError, UnicodeDecodeError, ValueError) as exc:
-        raise DatasetLoadError("Could not read the uploaded dataset. Please check the file format.") from exc
+        raise DatasetLoadError(
+            "Could not read the uploaded dataset. Please check the file format."
+        ) from exc
 
     if dataframe.empty:
         raise DatasetLoadError("Uploaded dataset is empty.")
     if len(dataframe.columns) == 0:
         raise DatasetLoadError("Uploaded dataset has no columns.")
     if max_rows is not None and len(dataframe) > max_rows:
-        raise DatasetLoadError(f"Uploaded dataset has too many rows. Maximum is {max_rows}.")
+        raise DatasetLoadError(
+            f"Uploaded dataset has too many rows. Maximum is {max_rows}."
+        )
     if max_columns is not None and len(dataframe.columns) > max_columns:
-        raise DatasetLoadError(f"Uploaded dataset has too many columns. Maximum is {max_columns}.")
+        raise DatasetLoadError(
+            f"Uploaded dataset has too many columns. Maximum is {max_columns}."
+        )
 
     dataframe.columns = [str(column).strip() for column in dataframe.columns]
     if any(not column for column in dataframe.columns):

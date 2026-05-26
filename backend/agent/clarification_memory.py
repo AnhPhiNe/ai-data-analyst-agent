@@ -1,11 +1,20 @@
 from collections.abc import Callable
 from typing import Any
-import math
 
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
-from backend.agent.column_resolver import contains_normalized_column, normalize_text, resolve_column
+from backend.agent.column_resolver import (
+    contains_normalized_column,
+    normalize_text,
+    resolve_column,
+)
 from backend.agent.correlation_helpers import find_mentioned_numeric_column
+from backend.agent.helpers import (
+    detect_aggregation,
+    detect_chart_type,
+    get_histogram_bins,
+    has_group_intent,
+)
 from backend.agent.router import route_question
 from backend.agent.response_composer import clarification_response
 from backend.schemas import ChatResponse, ToolTraceItem
@@ -87,7 +96,9 @@ def try_resolve_pending_clarification(
     )
 
 
-def set_pending_from_question(session: DatasetSession, question: str, message: str) -> None:
+def set_pending_from_question(
+    session: DatasetSession, question: str, message: str
+) -> None:
     pending = _build_pending_from_question(session, question, message)
     if pending is not None:
         session_store.set_pending_clarification(session.session_id, pending)
@@ -103,7 +114,9 @@ def set_pending_from_tool_call(
     if tool_name == "aggregate_metric":
         pending = {
             "intent": "aggregate_metric",
-            "operation": str(arguments.get("operation", _detect_aggregation_operation(question) or "mean")),
+            "operation": str(
+                arguments.get("operation", detect_aggregation(question) or "mean")
+            ),
             "metric_column": arguments.get("metric_column"),
             "group_by": arguments.get("group_by"),
             "original_question": question,
@@ -122,7 +135,9 @@ def set_pending_from_tool_call(
         )
 
 
-def column_options(session: DatasetSession, numeric_only: bool = False, limit: int = 12) -> list[str]:
+def column_options(
+    session: DatasetSession, numeric_only: bool = False, limit: int = 12
+) -> list[str]:
     columns: list[str] = []
     for column in session.dataframe.columns:
         column_name = str(column)
@@ -132,12 +147,14 @@ def column_options(session: DatasetSession, numeric_only: bool = False, limit: i
     return columns[:limit]
 
 
-def _build_pending_from_question(session: DatasetSession, question: str, message: str) -> dict[str, object] | None:
-    normalized = _normalize_text(question)
-    operation = _detect_aggregation_operation(question)
+def _build_pending_from_question(
+    session: DatasetSession, question: str, message: str
+) -> dict[str, object] | None:
+    normalized = normalize_text(question)
+    operation = detect_aggregation(question)
     if operation is not None:
         metric_column, group_by = _infer_metric_and_group(session, question)
-        if metric_column is not None and not _has_group_intent(normalized):
+        if metric_column is not None and not has_group_intent(normalized):
             return None
         return {
             "intent": "aggregate_metric",
@@ -148,11 +165,22 @@ def _build_pending_from_question(session: DatasetSession, question: str, message
             "message": message,
         }
 
-    if any(token in normalized for token in ("bieu do", "chart", "plot", "histogram", "phan phoi", "scatter", "heatmap")):
+    if any(
+        token in normalized
+        for token in (
+            "bieu do",
+            "chart",
+            "plot",
+            "histogram",
+            "phan phoi",
+            "scatter",
+            "heatmap",
+        )
+    ):
         metric_column, group_by = _infer_metric_and_group(session, question)
         return {
             "intent": "generate_chart_spec",
-            "chart_type": _detect_pending_chart_type(question),
+            "chart_type": detect_chart_type(question),
             "chart_type_explicit": _has_explicit_chart_type(question),
             "metric_column": metric_column,
             "group_by": group_by,
@@ -171,15 +199,21 @@ def _build_pending_from_question(session: DatasetSession, question: str, message
 
 
 def _is_new_standalone_intent(question: str, pending_intent: str) -> bool:
-    normalized = _normalize_text(question)
-    chart_tokens = ("phan phoi", "bieu do", "chart", "plot", "histogram", "scatter", "heatmap")
-    if pending_intent != "generate_chart_spec" and any(token in normalized for token in chart_tokens):
+    normalized = normalize_text(question)
+    chart_tokens = (
+        "phan phoi",
+        "bieu do",
+        "chart",
+        "plot",
+        "histogram",
+        "scatter",
+        "heatmap",
+    )
+    if pending_intent != "generate_chart_spec" and any(
+        token in normalized for token in chart_tokens
+    ):
         return True
     return False
-
-
-def _has_group_intent(normalized: str) -> bool:
-    return any(token in normalized for token in ("theo nhom", "by group", "group by", "theo"))
 
 
 def _resolve_pending_aggregate(
@@ -236,7 +270,7 @@ def _resolve_pending_chart(
     chart_type = str(pending.get("chart_type", "bar"))
     chart_type_explicit = bool(pending.get("chart_type_explicit", False))
     if not chart_type_explicit:
-        follow_chart_type = _detect_pending_chart_type(follow_up)
+        follow_chart_type = detect_chart_type(follow_up)
         if follow_chart_type != "bar" or _has_explicit_chart_type(follow_up):
             chart_type = follow_chart_type
             chart_type_explicit = _has_explicit_chart_type(follow_up)
@@ -246,19 +280,34 @@ def _resolve_pending_chart(
     pending["chart_type"] = chart_type
     pending["chart_type_explicit"] = chart_type_explicit
 
-    numeric_mentions = [column for column in mentioned_columns if _is_numeric_dataset_column(session, column)]
-    categorical_mentions = [column for column in mentioned_columns if not _is_numeric_dataset_column(session, column)]
+    numeric_mentions = [
+        column
+        for column in mentioned_columns
+        if _is_numeric_dataset_column(session, column)
+    ]
 
     if chart_type == "scatter" and len(numeric_mentions) >= 2:
         return {
             "tool_name": "generate_chart_spec",
-            "arguments": {"chart_type": "scatter", "x": numeric_mentions[0], "y": numeric_mentions[1]},
+            "arguments": {
+                "chart_type": "scatter",
+                "x": numeric_mentions[0],
+                "y": numeric_mentions[1],
+            },
         }
 
-    if chart_type in {"histogram", "bar"} and not chart_type_explicit and len(numeric_mentions) >= 2:
+    if (
+        chart_type in {"histogram", "bar"}
+        and not chart_type_explicit
+        and len(numeric_mentions) >= 2
+    ):
         return {
             "tool_name": "generate_chart_spec",
-            "arguments": {"chart_type": "scatter", "x": numeric_mentions[0], "y": numeric_mentions[1]},
+            "arguments": {
+                "chart_type": "scatter",
+                "x": numeric_mentions[0],
+                "y": numeric_mentions[1],
+            },
         }
 
     if chart_type == "pie" and isinstance(group_by, str):
@@ -267,19 +316,25 @@ def _resolve_pending_chart(
             "arguments": {"chart_type": "pie", "names": group_by},
         }
 
-    if not chart_type_explicit and not isinstance(metric_column, str) and isinstance(group_by, str):
+    if (
+        not chart_type_explicit
+        and not isinstance(metric_column, str)
+        and isinstance(group_by, str)
+    ):
         return {
             "tool_name": "generate_chart_spec",
             "arguments": {"chart_type": "pie", "names": group_by},
         }
 
-    if isinstance(metric_column, str) and (chart_type == "histogram" or (not chart_type_explicit and group_by is None)):
+    if isinstance(metric_column, str) and (
+        chart_type == "histogram" or (not chart_type_explicit and group_by is None)
+    ):
         return {
             "tool_name": "generate_chart_spec",
             "arguments": {
                 "chart_type": "histogram",
                 "x": metric_column,
-                "bins": _histogram_bins(session, metric_column),
+                "bins": get_histogram_bins(session.dataframe, metric_column),
             },
         }
     if not isinstance(metric_column, str) or not isinstance(group_by, str):
@@ -312,7 +367,9 @@ def _resolve_pending_correlation(
     return {"tool_name": "correlation_analysis", "arguments": {"columns": columns}}
 
 
-def _infer_metric_and_group(session: DatasetSession, text: str) -> tuple[str | None, str | None]:
+def _infer_metric_and_group(
+    session: DatasetSession, text: str
+) -> tuple[str | None, str | None]:
     metric_column: str | None = None
     group_by: str | None = None
     for column in _mentioned_columns(session, text):
@@ -329,11 +386,11 @@ def _infer_metric_and_group(session: DatasetSession, text: str) -> tuple[str | N
 
 
 def _mentioned_columns(session: DatasetSession, text: str) -> list[str]:
-    normalized = _normalize_text(text)
+    normalized = normalize_text(text)
     matches = []
     for column in session.dataframe.columns:
         column_name = str(column)
-        normalized_column = _normalize_text(column_name.replace("_", " "))
+        normalized_column = normalize_text(column_name.replace("_", " "))
         if _contains_normalized_column(normalized, normalized_column):
             matches.append(column_name)
     if matches:
@@ -344,41 +401,13 @@ def _mentioned_columns(session: DatasetSession, text: str) -> list[str]:
 
 
 def _is_numeric_dataset_column(session: DatasetSession, column: str) -> bool:
-    return is_numeric_dtype(session.dataframe[column]) and not is_bool_dtype(session.dataframe[column])
-
-
-def _detect_aggregation_operation(text: str) -> str | None:
-    normalized = _normalize_text(text)
-    if any(token in normalized for token in ("trung binh", "average", "mean", "avg")):
-        return "mean"
-    if any(token in normalized for token in ("tong", "sum", "total")):
-        return "sum"
-    if "median" in normalized or "trung vi" in normalized:
-        return "median"
-    if "min" in normalized or "nho nhat" in normalized:
-        return "min"
-    if "max" in normalized or "lon nhat" in normalized or "cao nhat" in normalized:
-        return "max"
-    return None
-
-
-def _detect_pending_chart_type(text: str) -> str:
-    normalized = _normalize_text(text)
-    if "histogram" in normalized or "phan phoi" in normalized:
-        return "histogram"
-    if "scatter" in normalized or "phan tan" in normalized:
-        return "scatter"
-    if "line" in normalized or "duong" in normalized:
-        return "line"
-    if "pie" in normalized or "tron" in normalized:
-        return "pie"
-    if "box" in normalized:
-        return "box"
-    return "bar"
+    return is_numeric_dtype(session.dataframe[column]) and not is_bool_dtype(
+        session.dataframe[column]
+    )
 
 
 def _has_explicit_chart_type(text: str) -> bool:
-    normalized = _normalize_text(text)
+    normalized = normalize_text(text)
     return any(
         token in normalized
         for token in (
@@ -397,21 +426,5 @@ def _has_explicit_chart_type(text: str) -> bool:
     )
 
 
-def _histogram_bins(session: DatasetSession, column: str) -> int:
-    series = session.dataframe[column].dropna()
-    row_count = int(series.count())
-    unique_count = int(series.nunique())
-    if row_count <= 0 or unique_count <= 0:
-        return 10
-    if unique_count <= 20:
-        return max(1, unique_count)
-    rice_bins = math.ceil(2 * (row_count ** (1 / 3)))
-    return max(8, min(50, unique_count, rice_bins))
-
-
 def _contains_normalized_column(normalized_text: str, normalized_column: str) -> bool:
     return contains_normalized_column(normalized_text, normalized_column)
-
-
-def _normalize_text(text: str) -> str:
-    return normalize_text(text)

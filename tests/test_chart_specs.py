@@ -1,7 +1,10 @@
 import pandas as pd
 import pytest
 
-from backend.visualization.chart_specs import ChartSpecValidationError, validate_chart_spec
+from backend.visualization.chart_specs import (
+    ChartSpecValidationError,
+    validate_chart_spec,
+)
 
 
 def _chart_dataframe() -> pd.DataFrame:
@@ -17,7 +20,12 @@ def _chart_dataframe() -> pd.DataFrame:
 
 
 def test_validate_bar_chart_spec() -> None:
-    spec = {"chart_type": "bar", "x": "department", "y": "salary", "title": "Salary by department"}
+    spec = {
+        "chart_type": "bar",
+        "x": "department",
+        "y": "salary",
+        "title": "Salary by department",
+    }
 
     validated = validate_chart_spec(spec, _chart_dataframe())
 
@@ -75,16 +83,27 @@ def test_validate_pie_chart_normalizes_x_y_aliases() -> None:
 
 
 def test_validate_pie_chart_rejects_high_cardinality_categories() -> None:
-    dataframe = pd.DataFrame({"category": [f"item_{index}" for index in range(11)], "amount": range(11)})
+    dataframe = pd.DataFrame(
+        {"category": [f"item_{index}" for index in range(11)], "amount": range(11)}
+    )
 
     with pytest.raises(ChartSpecValidationError, match="10 or fewer"):
-        validate_chart_spec({"chart_type": "pie", "names": "category", "values": "amount"}, dataframe)
+        validate_chart_spec(
+            {"chart_type": "pie", "names": "category", "values": "amount"}, dataframe
+        )
 
 
 def test_validate_chart_spec_rejects_unknown_fields() -> None:
-    spec = {"chart_type": "bar", "x": "department", "y": "salary", "code": "print('no')"}
+    spec = {
+        "chart_type": "bar",
+        "x": "department",
+        "y": "salary",
+        "code": "print('no')",
+    }
 
-    with pytest.raises(ChartSpecValidationError, match="Invalid chart spec field 'code'"):
+    with pytest.raises(
+        ChartSpecValidationError, match="Invalid chart spec field 'code'"
+    ):
         validate_chart_spec(spec, _chart_dataframe())
 
 
@@ -93,3 +112,42 @@ def test_validate_chart_spec_rejects_missing_required_axis() -> None:
 
     with pytest.raises(ChartSpecValidationError, match="'y' is required"):
         validate_chart_spec(spec, _chart_dataframe())
+
+
+def test_validate_bar_chart_rejects_continuous_numeric_x() -> None:
+    import pandas as pd
+    dataframe = pd.DataFrame(
+        {
+            "attendance": list(range(60, 101)),  # 41 unique values
+            "exam_score": [index * 1.5 for index in range(60, 101)],
+        }
+    )
+
+    spec = {
+        "chart_type": "bar",
+        "x": "attendance",
+        "y": "exam_score",
+    }
+
+    with pytest.raises(ChartSpecValidationError, match="continuous numeric column with 41 unique values"):
+        validate_chart_spec(spec, dataframe)
+
+
+def test_validate_bar_chart_allows_discrete_numeric_x() -> None:
+    import pandas as pd
+    dataframe = pd.DataFrame(
+        {
+            "rating": [1, 2, 3, 4, 5, 5, 4, 3, 2, 1],  # 5 unique values (<= 10)
+            "salary": [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+        }
+    )
+
+    spec = {
+        "chart_type": "bar",
+        "x": "rating",
+        "y": "salary",
+    }
+
+    validated = validate_chart_spec(spec, dataframe)
+    assert validated == spec
+

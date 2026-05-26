@@ -30,21 +30,29 @@ def test_validate_tool_call_accepts_valid_aggregate() -> None:
 
 
 def test_validate_tool_call_rejects_unknown_tool() -> None:
-    result = validate_tool_call(_sample_dataframe(), "run_python", {"code": "print('no')"})
+    result = validate_tool_call(
+        _sample_dataframe(), "run_python", {"code": "print('no')"}
+    )
 
     assert result.is_valid is False
     assert "not allowed" in result.message
 
 
 def test_validate_tool_call_rejects_dangerous_nested_key() -> None:
-    result = validate_tool_call(_sample_dataframe(), "value_counts", {"column": "department", "nested": {"exec": "x"}})
+    result = validate_tool_call(
+        _sample_dataframe(),
+        "value_counts",
+        {"column": "department", "nested": {"exec": "x"}},
+    )
 
     assert result.is_valid is False
     assert "not allowed" in result.message
 
 
 def test_validate_tool_call_rejects_missing_column() -> None:
-    result = validate_tool_call(_sample_dataframe(), "value_counts", {"column": "unknown"})
+    result = validate_tool_call(
+        _sample_dataframe(), "value_counts", {"column": "unknown"}
+    )
 
     assert result.is_valid is False
     assert "does not exist" in result.message
@@ -69,4 +77,8 @@ def test_validate_tool_call_accepts_chart_spec() -> None:
     )
 
     assert result.is_valid is True
-    assert result.normalized_arguments == {"chart_type": "bar", "x": "department", "y": "salary"}
+    assert result.normalized_arguments == {
+        "chart_type": "bar",
+        "x": "department",
+        "y": "salary",
+    }

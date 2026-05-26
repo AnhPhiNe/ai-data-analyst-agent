@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
+import re
+from backend.agent.column_resolver import normalize_text
 
 
 class GuardrailCategory(StrEnum):
@@ -116,9 +118,20 @@ BLOCKED_PATTERNS: list[tuple[GuardrailCategory, tuple[str, ...], str]] = [
     ),
 ]
 
-
 def check_guardrails(question: str) -> GuardrailResult:
-    normalized = _normalize(question)
+    # 1. Raw signature check for special strings (eval(, exec(, path prefixes, etc.)
+    raw_lower = question.lower()
+    for category, patterns, message in BLOCKED_PATTERNS:
+        for pattern in patterns:
+            # If pattern contains special characters, check raw substring
+            if any(char in pattern for char in ("(", "/", "\\", ".")):
+                if pattern in raw_lower:
+                    return GuardrailResult(
+                        is_allowed=False, category=category, message=message
+                    )
+
+    # 2. Normalized diacritics-safe whole-word boundary check
+    normalized = normalize_text(question)
     if not normalized:
         return GuardrailResult(
             is_allowed=False,
@@ -127,15 +140,17 @@ def check_guardrails(question: str) -> GuardrailResult:
         )
 
     for category, patterns, message in BLOCKED_PATTERNS:
-        if any(pattern in normalized for pattern in patterns):
-            return GuardrailResult(is_allowed=False, category=category, message=message)
+        for pattern in patterns:
+            norm_pattern = normalize_text(pattern)
+            if not norm_pattern:
+                continue
+            if re.search(rf"(?<!\w){re.escape(norm_pattern)}(?!\w)", normalized):
+                return GuardrailResult(
+                    is_allowed=False, category=category, message=message
+                )
 
     return GuardrailResult(
         is_allowed=True,
         category=GuardrailCategory.ALLOWED,
         message="Request is allowed.",
     )
-
-
-def _normalize(text: str) -> str:
-    return " ".join(text.lower().strip().split())

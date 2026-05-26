@@ -7,7 +7,10 @@ from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.profiling import profile_dataset
-from backend.visualization.chart_specs import ChartSpecValidationError, validate_chart_spec
+from backend.visualization.chart_specs import (
+    ChartSpecValidationError,
+    validate_chart_spec,
+)
 
 
 ToolStatus = Literal["success", "error"]
@@ -57,14 +60,24 @@ class ToolDefinition:
     function: ToolFunction
 
 
-def execute_tool(dataframe: pd.DataFrame, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
+def execute_tool(
+    dataframe: pd.DataFrame, tool_name: str, arguments: dict[str, Any] | None = None
+) -> ToolResult:
     if tool_name not in TOOL_REGISTRY:
-        return ToolResult(tool_name=tool_name, status="error", message=f"Tool '{tool_name}' is not allowed.")
+        return ToolResult(
+            tool_name=tool_name,
+            status="error",
+            message=f"Tool '{tool_name}' is not allowed.",
+        )
 
     if arguments is None:
         arguments = {}
     if not isinstance(arguments, dict):
-        return ToolResult(tool_name=tool_name, status="error", message="Tool arguments must be a JSON object.")
+        return ToolResult(
+            tool_name=tool_name,
+            status="error",
+            message="Tool arguments must be a JSON object.",
+        )
 
     try:
         _validate_safe_arguments(arguments)
@@ -74,7 +87,10 @@ def execute_tool(dataframe: pd.DataFrame, tool_name: str, arguments: dict[str, A
 
 
 def list_columns_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
-    table = [{"column": str(column), "dtype": str(dataframe[column].dtype)} for column in dataframe.columns]
+    table = [
+        {"column": str(column), "dtype": str(dataframe[column].dtype)}
+        for column in dataframe.columns
+    ]
     return ToolResult(
         tool_name="list_columns",
         status="success",
@@ -84,7 +100,9 @@ def list_columns_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Too
     )
 
 
-def profile_dataset_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def profile_dataset_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     profile = profile_dataset(dataframe)
     return ToolResult(
         tool_name="profile_dataset",
@@ -94,7 +112,9 @@ def profile_dataset_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> 
     )
 
 
-def describe_numeric_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def describe_numeric_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     column = arguments.get("column")
     numeric_columns = _numeric_columns(dataframe)
 
@@ -131,7 +151,9 @@ def describe_numeric_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) ->
     )
 
 
-def detect_missing_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def detect_missing_values_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     row_count = len(dataframe)
     table = []
     for column in dataframe.columns:
@@ -140,7 +162,9 @@ def detect_missing_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any
             {
                 "column": str(column),
                 "missing_count": missing_count,
-                "missing_percent": round((missing_count / row_count * 100) if row_count else 0.0, 2),
+                "missing_percent": round(
+                    (missing_count / row_count * 100) if row_count else 0.0, 2
+                ),
             }
         )
 
@@ -176,11 +200,15 @@ def value_counts_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Too
     )
 
 
-def aggregate_metric_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def aggregate_metric_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     metric_column = _required_string(arguments, "metric_column")
     group_by = _required_string(arguments, "group_by")
     operation = str(arguments.get("operation", "mean")).lower()
-    limit = _bounded_int(arguments.get("limit", 20), "limit", min_value=1, max_value=100)
+    limit = _bounded_int(
+        arguments.get("limit", 20), "limit", min_value=1, max_value=100
+    )
 
     _require_column(dataframe, metric_column)
     _require_column(dataframe, group_by)
@@ -190,7 +218,11 @@ def aggregate_metric_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) ->
     if operation not in allowed_operations:
         raise ToolValidationError(f"Unsupported aggregation operation '{operation}'.")
 
-    grouped = dataframe.groupby(group_by, dropna=False)[metric_column].agg(operation).reset_index()
+    grouped = (
+        dataframe.groupby(group_by, dropna=False)[metric_column]
+        .agg(operation)
+        .reset_index()
+    )
     result_column = f"{operation}_{metric_column}"
     grouped = grouped.rename(columns={metric_column: result_column})
     grouped = grouped.sort_values(result_column, ascending=False).head(limit)
@@ -207,9 +239,13 @@ def sort_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
     column = _required_string(arguments, "column")
     _require_column(dataframe, column)
     ascending = bool(arguments.get("ascending", False))
-    limit = _bounded_int(arguments.get("limit", 10), "limit", min_value=1, max_value=100)
+    limit = _bounded_int(
+        arguments.get("limit", 10), "limit", min_value=1, max_value=100
+    )
 
-    sorted_frame = dataframe.sort_values(column, ascending=ascending, na_position="last").head(limit)
+    sorted_frame = dataframe.sort_values(
+        column, ascending=ascending, na_position="last"
+    ).head(limit)
     return ToolResult(
         tool_name="sort_values",
         status="success",
@@ -222,7 +258,9 @@ def filter_rows_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
     column = _required_string(arguments, "column")
     operator = _required_string(arguments, "operator").lower()
     value = arguments.get("value")
-    limit = _bounded_int(arguments.get("limit", 20), "limit", min_value=1, max_value=100)
+    limit = _bounded_int(
+        arguments.get("limit", 20), "limit", min_value=1, max_value=100
+    )
 
     _require_column(dataframe, column)
     mask = _build_filter_mask(dataframe[column], operator, value)
@@ -241,7 +279,9 @@ def filter_rows_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
     )
 
 
-def conditional_percentage_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def conditional_percentage_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     column = _required_string(arguments, "column")
     operator = _required_string(arguments, "operator").lower()
     value = arguments.get("value")
@@ -252,7 +292,9 @@ def conditional_percentage_tool(dataframe: pd.DataFrame, arguments: dict[str, An
     valid_rows = int(valid_mask.sum())
     matched_rows = int((mask & valid_mask).sum())
     total_rows = int(len(dataframe))
-    percent_of_valid = round((matched_rows / valid_rows * 100) if valid_rows else 0.0, 2)
+    percent_of_valid = round(
+        (matched_rows / valid_rows * 100) if valid_rows else 0.0, 2
+    )
     percent_of_rows = round((matched_rows / total_rows * 100) if total_rows else 0.0, 2)
 
     return ToolResult(
@@ -272,12 +314,16 @@ def conditional_percentage_tool(dataframe: pd.DataFrame, arguments: dict[str, An
     )
 
 
-def correlation_analysis_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def correlation_analysis_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     columns_arg = arguments.get("columns")
     if columns_arg is None:
         columns = _numeric_columns(dataframe)
     else:
-        if not isinstance(columns_arg, list) or not all(isinstance(column, str) for column in columns_arg):
+        if not isinstance(columns_arg, list) or not all(
+            isinstance(column, str) for column in columns_arg
+        ):
             raise ToolValidationError("'columns' must be a list of column names.")
         columns = columns_arg
 
@@ -286,7 +332,9 @@ def correlation_analysis_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]
         _require_numeric(dataframe, column)
 
     if len(columns) < 2:
-        raise ToolValidationError("Correlation analysis requires at least two numeric columns.")
+        raise ToolValidationError(
+            "Correlation analysis requires at least two numeric columns."
+        )
 
     matrix = dataframe[columns].corr(numeric_only=True)
     return ToolResult(
@@ -297,7 +345,9 @@ def correlation_analysis_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]
     )
 
 
-def generate_chart_spec_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
+def generate_chart_spec_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
     chart_spec = _validated_chart_spec(dataframe, arguments)
     return ToolResult(
         tool_name="generate_chart_spec",
@@ -307,7 +357,9 @@ def generate_chart_spec_tool(dataframe: pd.DataFrame, arguments: dict[str, Any])
     )
 
 
-def _validated_chart_spec(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> dict[str, Any]:
+def _validated_chart_spec(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> dict[str, Any]:
     try:
         return validate_chart_spec(arguments, dataframe)
     except ChartSpecValidationError as exc:
@@ -322,7 +374,9 @@ def _build_filter_mask(series: pd.Series, operator: str, value: Any) -> pd.Serie
     if operator == "contains":
         if value is None:
             raise ToolValidationError("'contains' filter requires a value.")
-        return series.astype(str).str.contains(str(value), case=False, na=False, regex=False)
+        return series.astype(str).str.contains(
+            str(value), case=False, na=False, regex=False
+        )
     if operator == "in":
         if not isinstance(value, list):
             raise ToolValidationError("'in' filter requires a list value.")
@@ -340,9 +394,13 @@ def _build_filter_mask(series: pd.Series, operator: str, value: Any) -> pd.Serie
     }
     if operator in numeric_operators:
         if not is_numeric_dtype(series):
-            raise ToolValidationError(f"Operator '{operator}' requires a numeric column.")
+            raise ToolValidationError(
+                f"Operator '{operator}' requires a numeric column."
+            )
         if not isinstance(value, int | float) or isinstance(value, bool):
-            raise ToolValidationError(f"Operator '{operator}' requires a numeric value.")
+            raise ToolValidationError(
+                f"Operator '{operator}' requires a numeric value."
+            )
         return numeric_operators[operator](series)
 
     raise ToolValidationError(f"Unsupported filter operator '{operator}'.")
@@ -402,7 +460,9 @@ def _bounded_int(value: Any, name: str, min_value: int, max_value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ToolValidationError(f"'{name}' must be an integer.")
     if value < min_value or value > max_value:
-        raise ToolValidationError(f"'{name}' must be between {min_value} and {max_value}.")
+        raise ToolValidationError(
+            f"'{name}' must be between {min_value} and {max_value}."
+        )
     return value
 
 
@@ -418,22 +478,36 @@ def _round(value: Any) -> float | None:
 
 
 TOOL_REGISTRY: dict[str, ToolDefinition] = {
-    "list_columns": ToolDefinition("list_columns", "List dataset columns and dtypes.", list_columns_tool),
-    "profile_dataset": ToolDefinition("profile_dataset", "Return dataset profile summary.", profile_dataset_tool),
-    "describe_numeric": ToolDefinition("describe_numeric", "Describe one or all numeric columns.", describe_numeric_tool),
+    "list_columns": ToolDefinition(
+        "list_columns", "List dataset columns and dtypes.", list_columns_tool
+    ),
+    "profile_dataset": ToolDefinition(
+        "profile_dataset", "Return dataset profile summary.", profile_dataset_tool
+    ),
+    "describe_numeric": ToolDefinition(
+        "describe_numeric",
+        "Describe one or all numeric columns.",
+        describe_numeric_tool,
+    ),
     "detect_missing_values": ToolDefinition(
         "detect_missing_values",
         "Calculate missing values for every column.",
         detect_missing_values_tool,
     ),
-    "value_counts": ToolDefinition("value_counts", "Return top values for a column.", value_counts_tool),
+    "value_counts": ToolDefinition(
+        "value_counts", "Return top values for a column.", value_counts_tool
+    ),
     "aggregate_metric": ToolDefinition(
         "aggregate_metric",
         "Aggregate a numeric metric by a group column.",
         aggregate_metric_tool,
     ),
-    "sort_values": ToolDefinition("sort_values", "Sort rows by a column.", sort_values_tool),
-    "filter_rows": ToolDefinition("filter_rows", "Filter rows using a safe operator.", filter_rows_tool),
+    "sort_values": ToolDefinition(
+        "sort_values", "Sort rows by a column.", sort_values_tool
+    ),
+    "filter_rows": ToolDefinition(
+        "filter_rows", "Filter rows using a safe operator.", filter_rows_tool
+    ),
     "conditional_percentage": ToolDefinition(
         "conditional_percentage",
         "Calculate the percentage of rows matching a safe condition.",

@@ -68,7 +68,9 @@ def test_router_routes_value_counts() -> None:
 
 
 def test_router_routes_average_metric_by_group() -> None:
-    decision = route_question(_sample_dataframe(), "Tính trung bình salary theo department")
+    decision = route_question(
+        _sample_dataframe(), "Tính trung bình salary theo department"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "aggregate_metric"
@@ -104,7 +106,9 @@ def test_router_routes_histogram() -> None:
 
 
 def test_router_routes_distribution_question_to_histogram() -> None:
-    decision = route_question(_sample_dataframe(), "Phân phối của salary trông như thế nào?")
+    decision = route_question(
+        _sample_dataframe(), "Phân phối của salary trông như thế nào?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "generate_chart_spec"
@@ -112,11 +116,17 @@ def test_router_routes_distribution_question_to_histogram() -> None:
 
 
 def test_router_fuzzy_matches_typo_for_distribution_column() -> None:
-    decision = route_question(_sample_dataframe(), "Phân phối của performance_scor thế nào?")
+    decision = route_question(
+        _sample_dataframe(), "Phân phối của performance_scor thế nào?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "generate_chart_spec"
-    assert decision.arguments == {"chart_type": "histogram", "x": "performance_score", "bins": 4}
+    assert decision.arguments == {
+        "chart_type": "histogram",
+        "x": "performance_score",
+        "bins": 4,
+    }
 
 
 def test_router_uses_dynamic_histogram_bins_for_larger_distribution() -> None:
@@ -137,7 +147,9 @@ def test_router_routes_pairwise_correlation_question() -> None:
         }
     )
 
-    decision = route_question(dataframe, "Attendance co tuong quan voi Exam_Score khong?")
+    decision = route_question(
+        dataframe, "Attendance co tuong quan voi Exam_Score khong?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "correlation_analysis"
@@ -157,7 +169,9 @@ def test_router_prioritizes_correlation_question_over_list_columns() -> None:
 
     assert decision.should_use_tool
     assert decision.tool_name == "correlation_analysis"
-    assert decision.arguments == {"columns": ["Exam_Score", "Hours_Studied", "Sleep_Hours"]}
+    assert decision.arguments == {
+        "columns": ["Exam_Score", "Hours_Studied", "Sleep_Hours"]
+    }
 
 
 def test_router_keeps_correlation_heatmap_as_chart_request() -> None:
@@ -176,7 +190,9 @@ def test_router_keeps_correlation_heatmap_as_chart_request() -> None:
 
 
 def test_router_falls_back_when_chart_and_aggregate_intents_conflict() -> None:
-    decision = route_question(_sample_dataframe(), "Ve bieu do salary trung binh theo department")
+    decision = route_question(
+        _sample_dataframe(), "Ve bieu do salary trung binh theo department"
+    )
 
     assert decision.route_type == "fallback"
     assert decision.should_use_tool is False
@@ -184,7 +200,9 @@ def test_router_falls_back_when_chart_and_aggregate_intents_conflict() -> None:
 
 
 def test_router_routes_numeric_percentage_condition() -> None:
-    decision = route_question(_sample_dataframe(), "Tỷ lệ nhân viên có salary dưới 1000 là bao nhiêu?")
+    decision = route_question(
+        _sample_dataframe(), "Tỷ lệ nhân viên có salary dưới 1000 là bao nhiêu?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "conditional_percentage"
@@ -200,7 +218,9 @@ def test_router_routes_score_alias_for_grouped_average() -> None:
         }
     )
 
-    decision = route_question(dataframe, "Điểm trung bình theo Parental_Involvement là bao nhiêu?")
+    decision = route_question(
+        dataframe, "Điểm trung bình theo Parental_Involvement là bao nhiêu?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "aggregate_metric"
@@ -220,7 +240,9 @@ def test_router_resolves_vietnamese_metric_tokens_for_non_student_schema() -> No
         }
     )
 
-    decision = route_question(dataframe, "Doanh thu hang thang trung binh theo Region la bao nhieu?")
+    decision = route_question(
+        dataframe, "Doanh thu hang thang trung binh theo Region la bao nhieu?"
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "aggregate_metric"
@@ -231,7 +253,9 @@ def test_router_resolves_vietnamese_metric_tokens_for_non_student_schema() -> No
     }
 
 
-def test_router_resolves_vietnamese_single_metric_when_multiple_numeric_columns_exist() -> None:
+def test_router_resolves_vietnamese_single_metric_when_multiple_numeric_columns_exist() -> (
+    None
+):
     dataframe = pd.DataFrame(
         {
             "Customer_Age": [22, 35, 41, 29],
@@ -259,7 +283,11 @@ def test_router_resolves_vietnamese_distribution_column_for_generic_schema() -> 
 
     assert decision.should_use_tool
     assert decision.tool_name == "generate_chart_spec"
-    assert decision.arguments == {"chart_type": "histogram", "x": "Sleep_Duration", "bins": 5}
+    assert decision.arguments == {
+        "chart_type": "histogram",
+        "x": "Sleep_Duration",
+        "bins": 5,
+    }
 
 
 def test_router_routes_binary_category_percentage_condition() -> None:
@@ -270,7 +298,11 @@ def test_router_routes_binary_category_percentage_condition() -> None:
 
     assert decision.should_use_tool
     assert decision.tool_name == "conditional_percentage"
-    assert decision.arguments == {"column": "Extracurricular_Activities", "operator": "eq", "value": "Yes"}
+    assert decision.arguments == {
+        "column": "Extracurricular_Activities",
+        "operator": "eq",
+        "value": "Yes",
+    }
 
 
 def test_router_routes_negative_binary_category_percentage_condition() -> None:
@@ -281,11 +313,18 @@ def test_router_routes_negative_binary_category_percentage_condition() -> None:
 
     assert decision.should_use_tool
     assert decision.tool_name == "conditional_percentage"
-    assert decision.arguments == {"column": "Extracurricular_Activities", "operator": "eq", "value": "No"}
+    assert decision.arguments == {
+        "column": "Extracurricular_Activities",
+        "operator": "eq",
+        "value": "No",
+    }
 
 
 def test_router_routes_single_column_average_to_numeric_summary() -> None:
-    decision = route_question(_sample_dataframe(), "Tỷ lệ phần trăm performance_score trung bình là bao nhiêu?")
+    decision = route_question(
+        _sample_dataframe(),
+        "Tỷ lệ phần trăm performance_score trung bình là bao nhiêu?",
+    )
 
     assert decision.should_use_tool
     assert decision.tool_name == "describe_numeric"

@@ -5,7 +5,9 @@ from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-ChartType = Literal["bar", "line", "histogram", "scatter", "correlation_heatmap", "box", "pie"]
+ChartType = Literal[
+    "bar", "line", "histogram", "scatter", "correlation_heatmap", "box", "pie"
+]
 
 
 class ChartSpecValidationError(ValueError):
@@ -26,7 +28,9 @@ class ChartSpec(BaseModel):
     bins: int | None = None
 
 
-def validate_chart_spec(spec: dict[str, Any], dataframe: pd.DataFrame) -> dict[str, Any]:
+def validate_chart_spec(
+    spec: dict[str, Any], dataframe: pd.DataFrame
+) -> dict[str, Any]:
     if not isinstance(spec, dict):
         raise ChartSpecValidationError("Chart spec must be a JSON object.")
 
@@ -35,7 +39,9 @@ def validate_chart_spec(spec: dict[str, Any], dataframe: pd.DataFrame) -> dict[s
     except ValidationError as exc:
         first_error = exc.errors()[0]
         field = ".".join(str(item) for item in first_error["loc"])
-        raise ChartSpecValidationError(f"Invalid chart spec field '{field}': {first_error['msg']}") from exc
+        raise ChartSpecValidationError(
+            f"Invalid chart spec field '{field}': {first_error['msg']}"
+        ) from exc
 
     normalized = chart_spec.model_dump(exclude_none=True)
     chart_type = chart_spec.chart_type
@@ -46,13 +52,24 @@ def validate_chart_spec(spec: dict[str, Any], dataframe: pd.DataFrame) -> dict[s
     if chart_type == "bar":
         _require_xy(dataframe, chart_spec)
         _require_numeric(dataframe, chart_spec.y)
+        # Prevent bar chart if x is a continuous numeric column with > 10 unique values
+        x_col = chart_spec.x
+        if x_col is not None and is_numeric_dtype(dataframe[x_col]) and not is_bool_dtype(dataframe[x_col]):
+            unique_count = int(dataframe[x_col].nunique(dropna=True))
+            if unique_count > 10:
+                raise ChartSpecValidationError(
+                    f"Bar chart x-axis '{x_col}' is a continuous numeric column with {unique_count} unique values. "
+                    "For continuous numeric vs numeric variables, please use 'scatter' or 'line' instead."
+                )
     elif chart_type == "line":
         _require_xy(dataframe, chart_spec)
         _require_numeric(dataframe, chart_spec.y)
     elif chart_type == "histogram":
         _require_named_column(dataframe, chart_spec.x, "x")
         _require_numeric(dataframe, chart_spec.x)
-        if chart_spec.bins is not None and (chart_spec.bins < 1 or chart_spec.bins > 100):
+        if chart_spec.bins is not None and (
+            chart_spec.bins < 1 or chart_spec.bins > 100
+        ):
             raise ChartSpecValidationError("'bins' must be between 1 and 100.")
     elif chart_type == "scatter":
         _require_xy(dataframe, chart_spec)
@@ -64,7 +81,9 @@ def validate_chart_spec(spec: dict[str, Any], dataframe: pd.DataFrame) -> dict[s
             _require_column(dataframe, column)
             _require_numeric(dataframe, column)
         if len(columns) < 2:
-            raise ChartSpecValidationError("Correlation heatmap requires at least two numeric columns.")
+            raise ChartSpecValidationError(
+                "Correlation heatmap requires at least two numeric columns."
+            )
         normalized["columns"] = columns
     elif chart_type == "box":
         _require_named_column(dataframe, chart_spec.y, "y")
@@ -77,7 +96,9 @@ def validate_chart_spec(spec: dict[str, Any], dataframe: pd.DataFrame) -> dict[s
             raise ChartSpecValidationError("'names' is required for pie charts.")
         _require_column(dataframe, names)
         if int(dataframe[names].nunique(dropna=True)) > 10:
-            raise ChartSpecValidationError("Pie chart is allowed only for categories with 10 or fewer values.")
+            raise ChartSpecValidationError(
+                "Pie chart is allowed only for categories with 10 or fewer values."
+            )
         values = chart_spec.values or chart_spec.y
         if values is not None:
             _require_column(dataframe, values)
@@ -94,7 +115,9 @@ def _require_xy(dataframe: pd.DataFrame, chart_spec: ChartSpec) -> None:
     _require_named_column(dataframe, chart_spec.y, "y")
 
 
-def _require_named_column(dataframe: pd.DataFrame, column: str | None, field_name: str) -> None:
+def _require_named_column(
+    dataframe: pd.DataFrame, column: str | None, field_name: str
+) -> None:
     if not isinstance(column, str) or not column.strip():
         raise ChartSpecValidationError(f"'{field_name}' is required.")
     _require_column(dataframe, column)

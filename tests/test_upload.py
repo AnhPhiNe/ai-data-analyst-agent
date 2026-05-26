@@ -1,16 +1,10 @@
 from io import BytesIO
 
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.session_store import session_store
-
-
-@pytest.fixture(autouse=True)
-def clear_session_store() -> None:
-    session_store.clear()
 
 
 def test_upload_csv_returns_session_and_preview() -> None:
