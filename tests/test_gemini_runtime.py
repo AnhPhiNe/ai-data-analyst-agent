@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from backend.agent.gemini_runtime import (
+    LLMRuntimeError,
     TransientLLMError,
     build_tool_selection_prompt,
     choose_tool_with_gemini,
@@ -10,6 +11,25 @@ from backend.agent.gemini_runtime import (
 
 
 from tests.conftest import FakeProvider
+
+
+class StructuredSchemaFallbackProvider:
+    def __init__(self) -> None:
+        self.generate_calls = 0
+        self.structured_calls = 0
+
+    def generate_structured(self, prompt: str, response_schema: object) -> str:
+        self.structured_calls += 1
+        raise LLMRuntimeError(
+            "Schema properties.arguments.additionalProperties Extra inputs are not permitted"
+        )
+
+    def generate(self, prompt: str) -> str:
+        self.generate_calls += 1
+        return (
+            '{"action":"tool_call","confidence":0.91,"tool_name":"value_counts",'
+            '"arguments":{"column":"department","top_n":2}}'
+        )
 
 
 def _sample_dataframe() -> pd.DataFrame:
@@ -77,6 +97,22 @@ def test_choose_tool_with_gemini_returns_validated_tool_call() -> None:
         "operation": "mean",
         "limit": 20,
     }
+
+
+def test_choose_tool_with_gemini_falls_back_when_structured_schema_is_rejected() -> (
+    None
+):
+    provider = StructuredSchemaFallbackProvider()
+
+    result = choose_tool_with_gemini(
+        _sample_dataframe(), "Co bao nhieu department?", provider
+    )
+
+    assert result.status == "tool_call"
+    assert result.tool_name == "value_counts"
+    assert result.arguments == {"column": "department", "top_n": 2}
+    assert provider.structured_calls == 1
+    assert provider.generate_calls == 1
 
 
 def test_choose_tool_with_gemini_returns_clarify_for_invalid_tool_call() -> None:

@@ -37,6 +37,14 @@ def test_router_routes_missing_values() -> None:
     assert decision.tool_name == "detect_missing_values"
 
 
+def test_router_routes_data_quality_question() -> None:
+    decision = route_question(_sample_dataframe(), "Dataset co van de du lieu gi?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "data_quality_report"
+    assert decision.arguments == {}
+
+
 def test_router_prioritizes_missing_over_list_columns_phrase() -> None:
     decision = route_question(_sample_dataframe(), "Nhung cot nao thieu du lieu?")
 
@@ -67,6 +75,16 @@ def test_router_routes_value_counts() -> None:
     assert decision.arguments == {"column": "department", "top_n": 2}
 
 
+def test_router_routes_distinct_value_count_question() -> None:
+    decision = route_question(
+        _sample_dataframe(), "Co bao nhieu phong ban khac nhau trong du lieu?"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "value_counts"
+    assert decision.arguments == {"column": "department", "top_n": 10}
+
+
 def test_router_routes_average_metric_by_group() -> None:
     decision = route_question(
         _sample_dataframe(), "Tính trung bình salary theo department"
@@ -76,6 +94,20 @@ def test_router_routes_average_metric_by_group() -> None:
     assert decision.tool_name == "aggregate_metric"
     assert decision.arguments == {
         "metric_column": "salary",
+        "group_by": "department",
+        "operation": "mean",
+    }
+
+
+def test_router_routes_compare_groups_question() -> None:
+    decision = route_question(
+        _sample_dataframe(), "So sanh performance_score theo department"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "compare_groups"
+    assert decision.arguments == {
+        "metric_column": "performance_score",
         "group_by": "department",
         "operation": "mean",
     }
@@ -113,6 +145,14 @@ def test_router_routes_distribution_question_to_histogram() -> None:
     assert decision.should_use_tool
     assert decision.tool_name == "generate_chart_spec"
     assert decision.arguments == {"chart_type": "histogram", "x": "salary", "bins": 4}
+
+
+def test_router_routes_outlier_question() -> None:
+    decision = route_question(_sample_dataframe(), "Cot salary co outlier khong?")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "outlier_detection"
+    assert decision.arguments == {"column": "salary", "limit": 20}
 
 
 def test_router_fuzzy_matches_typo_for_distribution_column() -> None:

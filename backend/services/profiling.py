@@ -2,7 +2,7 @@ import math
 from typing import Any
 
 import pandas as pd
-from pandas.api.types import is_bool_dtype, is_numeric_dtype
+from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 
 
 def _json_safe(value: Any) -> Any:
@@ -39,6 +39,7 @@ def profile_dataset(dataframe: pd.DataFrame) -> dict[str, object]:
         "column_names": list_columns(dataframe),
         "preview": dataframe_preview(dataframe),
         "dtypes": column_profiles,
+        "column_metadata": _column_metadata(dataframe, column_profiles),
         "missing_values": [
             profile for profile in column_profiles if profile["missing_count"] > 0
         ],
@@ -68,6 +69,72 @@ def _column_profiles(dataframe: pd.DataFrame) -> list[dict[str, object]]:
         )
 
     return profiles
+
+
+def _column_metadata(
+    dataframe: pd.DataFrame, column_profiles: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    metadata: list[dict[str, object]] = []
+    profile_by_name = {str(profile["name"]): profile for profile in column_profiles}
+
+    for column in dataframe.columns:
+        column_name = str(column)
+        series = dataframe[column]
+        non_null = series.dropna()
+        profile = profile_by_name[column_name]
+        unique_count = int(non_null.nunique())
+        metadata.append(
+            {
+                "name": column_name,
+                "dtype": str(series.dtype),
+                "missing_percent": float(profile["missing_percent"]),
+                "unique_count": unique_count,
+                "sample_values": _sample_values(non_null),
+                "inferred_kind": _infer_column_kind(column_name, series, unique_count),
+            }
+        )
+
+    return metadata
+
+
+def _sample_values(series: pd.Series, limit: int = 3) -> list[object]:
+    samples: list[object] = []
+    for value in series.head(limit):
+        samples.append(_json_safe(value))
+    return samples
+
+
+def _infer_column_kind(column_name: str, series: pd.Series, unique_count: int) -> str:
+    normalized_name = column_name.lower().replace("-", "_").replace(" ", "_")
+    non_null_count = int(series.notna().sum())
+    unique_ratio = unique_count / non_null_count if non_null_count else 0.0
+
+    if normalized_name == "id" or normalized_name.endswith("_id"):
+        return "id_like"
+    if is_bool_dtype(series):
+        return "boolean"
+    if is_numeric_dtype(series):
+        return "numeric"
+    if is_datetime64_any_dtype(series) or _looks_datetime_like(series):
+        return "datetime_like"
+    if non_null_count >= 10 and unique_ratio >= 0.95:
+        return "id_like"
+    return "categorical"
+
+
+def _looks_datetime_like(series: pd.Series) -> bool:
+    non_null = series.dropna().head(25)
+    if non_null.empty:
+        return False
+    string_values = non_null.astype(str)
+    date_like = string_values.str.contains(
+        r"(?:\d{4}[-/]\d{1,2}[-/]\d{1,2})|(?:\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+        regex=True,
+    )
+    if float(date_like.mean()) < 0.8:
+        return False
+    parsed = pd.to_datetime(non_null, errors="coerce")
+    return bool(parsed.notna().mean() >= 0.8)
 
 
 def _numeric_summary(dataframe: pd.DataFrame) -> list[dict[str, object]]:

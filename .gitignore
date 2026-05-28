@@ -7,3 +7,5 @@ __pycache__/
 .coverage
 .mypy_cache/
 htmlcov/
+data/sessions/
+docs/assets/

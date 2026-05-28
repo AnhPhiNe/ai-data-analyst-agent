@@ -21,9 +21,12 @@ def test_registry_contains_only_expected_mvp_tools() -> None:
         "profile_dataset",
         "describe_numeric",
         "detect_missing_values",
+        "data_quality_report",
         "value_counts",
         "aggregate_metric",
+        "compare_groups",
         "sort_values",
+        "outlier_detection",
         "filter_rows",
         "conditional_percentage",
         "correlation_analysis",
@@ -108,6 +111,27 @@ def test_detect_missing_values_returns_all_columns() -> None:
     }
 
 
+def test_data_quality_report_returns_quality_signals() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": [f"user_{index}" for index in range(25)] + ["user_24"],
+            "department": ["Engineering"] * 26,
+            "salary": [1000.0, None, *([1200.0] * 24)],
+            "free_text": [f"note_{index}" for index in range(26)],
+        }
+    )
+
+    result = execute_tool(dataframe, "data_quality_report")
+
+    assert result.status == "success"
+    assert result.data["duplicate_rows"] == 0
+    assert "salary" in result.data["missing_columns"]
+    assert "department" in result.data["constant_columns"]
+    assert "user_id" in result.data["possible_id_columns"]
+    assert "free_text" in result.data["high_cardinality_columns"]
+    assert any(row["check"] == "missing_values" for row in result.table)
+
+
 def test_value_counts_returns_top_categories() -> None:
     result = execute_tool(
         _sample_dataframe(), "value_counts", {"column": "department", "top_n": 2}
@@ -118,6 +142,12 @@ def test_value_counts_returns_top_categories() -> None:
         {"value": "Engineering", "count": 2, "percent": 40.0},
         {"value": "Sales", "count": 2, "percent": 40.0},
     ]
+    assert result.data == {
+        "column": "department",
+        "unique_count": 3,
+        "non_null_count": 5,
+        "top_n": 2,
+    }
 
 
 def test_aggregate_metric_groups_numeric_metric() -> None:
@@ -129,6 +159,21 @@ def test_aggregate_metric_groups_numeric_metric() -> None:
 
     assert result.status == "success"
     assert result.table[0] == {"department": "Engineering", "mean_salary": 1350.0}
+
+
+def test_compare_groups_returns_group_statistics() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "compare_groups",
+        {"metric_column": "salary", "group_by": "department", "operation": "mean"},
+    )
+
+    assert result.status == "success"
+    assert result.data["overall_mean"] == 1137.5
+    assert result.table[0]["department"] == "Engineering"
+    assert result.table[0]["mean_salary"] == 1350.0
+    assert result.table[0]["median_salary"] == 1350.0
+    assert result.table[0]["diff_from_overall_mean"] == 212.5
 
 
 def test_aggregate_metric_rejects_missing_column() -> None:
@@ -151,6 +196,32 @@ def test_sort_values_returns_ordered_rows() -> None:
 
     assert result.status == "success"
     assert [row["salary"] for row in result.table] == [1500.0, 1200.0]
+
+
+def test_outlier_detection_returns_iqr_outliers() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "department": ["A", "A", "B", "B", "C", "C"],
+            "salary": [10, 11, 12, 13, 14, 100],
+        }
+    )
+
+    result = execute_tool(dataframe, "outlier_detection", {"column": "salary"})
+
+    assert result.status == "success"
+    assert result.data["method"] == "iqr"
+    assert result.data["outlier_count"] == 1
+    assert result.table[0]["salary"] == 100
+    assert result.table[0]["row_index"] == 5
+
+
+def test_outlier_detection_rejects_non_numeric_column() -> None:
+    result = execute_tool(
+        _sample_dataframe(), "outlier_detection", {"column": "department"}
+    )
+
+    assert result.status == "error"
+    assert "must be numeric" in result.message
 
 
 def test_filter_rows_supports_numeric_operator() -> None:

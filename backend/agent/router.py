@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import re
+from collections.abc import Callable
 from typing import Any, Literal
 
 import pandas as pd
@@ -25,6 +26,7 @@ RouteType = Literal["tool", "fallback", "clarify"]
 
 CONFIDENCE_PROFILE = 0.96
 CONFIDENCE_MISSING = 0.95
+CONFIDENCE_DATA_QUALITY = 0.94
 CONFIDENCE_LIST_COLUMNS = 0.95
 CONFIDENCE_PERCENTAGE_NUMERIC = 0.93
 CONFIDENCE_PERCENTAGE_CATEGORICAL = 0.92
@@ -33,7 +35,10 @@ CONFIDENCE_DISTRIBUTION = 0.93
 CONFIDENCE_DESCRIBE_COL = 0.93
 CONFIDENCE_DESCRIBE_ALL = 0.90
 CONFIDENCE_VALUE_COUNTS = 0.91
+CONFIDENCE_SORT = 0.91
 CONFIDENCE_AGGREGATE = 0.90
+CONFIDENCE_COMPARE_GROUPS = 0.91
+CONFIDENCE_OUTLIER = 0.92
 CONFIDENCE_AGGREGATE_DESCRIBE = 0.91
 CONFIDENCE_CHART_HISTOGRAM = 0.90
 CONFIDENCE_CHART_HEATMAP = 0.88
@@ -62,6 +67,9 @@ class RouteCandidate:
     priority: int
     score: float
     decision: RouterDecision
+
+
+RouteBuilder = Callable[[pd.DataFrame, str], list[RouteCandidate]]
 
 
 def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
@@ -96,16 +104,8 @@ def _build_route_candidates(
     dataframe: pd.DataFrame, normalized: str
 ) -> list[RouteCandidate]:
     candidates: list[RouteCandidate] = []
-    candidates.extend(_profile_candidates(normalized))
-    candidates.extend(_percentage_candidates(dataframe, normalized))
-    candidates.extend(_correlation_candidates(dataframe, normalized))
-    candidates.extend(_missing_candidates(normalized))
-    candidates.extend(_list_column_candidates(normalized))
-    candidates.extend(_distribution_candidates(dataframe, normalized))
-    candidates.extend(_describe_candidates(dataframe, normalized))
-    candidates.extend(_value_count_candidates(dataframe, normalized))
-    candidates.extend(_aggregate_candidates(dataframe, normalized))
-    candidates.extend(_chart_candidates(dataframe, normalized))
+    for builder in ROUTE_BUILDERS:
+        candidates.extend(builder(dataframe, normalized))
     return candidates
 
 
@@ -239,6 +239,35 @@ def _missing_candidates(normalized: str) -> list[RouteCandidate]:
     return []
 
 
+def _data_quality_candidates(normalized: str) -> list[RouteCandidate]:
+    if has_any_phrase(
+        normalized,
+        (
+            "chat luong du lieu",
+            "data quality",
+            "van de du lieu",
+            "du lieu co van de",
+            "duplicate",
+            "trung lap",
+            "dong trung",
+            "cot hang so",
+            "constant column",
+            "high cardinality",
+            "id column",
+            "cot id",
+        ),
+    ):
+        return [
+            _candidate(
+                "data_quality",
+                92,
+                _tool("data_quality_report", {}, CONFIDENCE_DATA_QUALITY),
+                evidence=2.5,
+            )
+        ]
+    return []
+
+
 def _list_column_candidates(normalized: str) -> list[RouteCandidate]:
     if has_any_phrase(
         normalized, ("nhung cot nao", "danh sach cot", "list columns", "columns")
@@ -296,6 +325,57 @@ def _distribution_candidates(
     ]
 
 
+def _outlier_candidates(
+    dataframe: pd.DataFrame, normalized: str
+) -> list[RouteCandidate]:
+    if not has_any_phrase(
+        normalized,
+        (
+            "outlier",
+            "ngoai lai",
+            "bat thuong",
+            "gia tri bat thuong",
+            "diem bat thuong",
+            "du lieu bat thuong",
+        ),
+    ):
+        return []
+
+    column = _find_metric_column(dataframe, normalized) or _find_column(
+        dataframe, normalized
+    )
+    if column is None:
+        return [
+            _candidate(
+                "outlier",
+                88,
+                _clarify("Ban muon kiem tra outlier cho cot numeric nao?"),
+            )
+        ]
+    if not _is_numeric_column(dataframe, column):
+        return [
+            _candidate(
+                "outlier",
+                88,
+                _clarify(
+                    f"Cot '{column}' khong phai numeric. Hay chon mot cot numeric de kiem tra outlier."
+                ),
+            )
+        ]
+    return [
+        _candidate(
+            "outlier",
+            88,
+            _tool(
+                "outlier_detection",
+                {"column": column, "limit": 20},
+                CONFIDENCE_OUTLIER,
+            ),
+            evidence=3.0,
+        )
+    ]
+
+
 def _describe_candidates(
     dataframe: pd.DataFrame, normalized: str
 ) -> list[RouteCandidate]:
@@ -336,9 +416,22 @@ def _describe_candidates(
 def _value_count_candidates(
     dataframe: pd.DataFrame, normalized: str
 ) -> list[RouteCandidate]:
-    if not has_any_phrase(
-        normalized, ("top", "value counts", "dem", "pho bien", "tan suat")
-    ):
+    has_value_count_intent = has_any_phrase(
+        normalized,
+        (
+            "top",
+            "value counts",
+            "dem",
+            "pho bien",
+            "tan suat",
+            "khac nhau",
+            "distinct",
+            "unique",
+            "gia tri rieng",
+            "so luong gia tri",
+        ),
+    )
+    if not has_value_count_intent:
         return []
     column = _find_column(dataframe, normalized)
     if column is None:
@@ -353,6 +446,82 @@ def _value_count_candidates(
                 CONFIDENCE_VALUE_COUNTS,
             ),
             evidence=2.0,
+        )
+    ]
+
+
+def _sort_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCandidate]:
+    has_explicit_sort = has_any_phrase(normalized, ("sap xep", "sort", "rank"))
+    has_rank_language = has_any_phrase(
+        normalized,
+        (
+            "cao nhat",
+            "thap nhat",
+            "highest",
+            "lowest",
+        ),
+    )
+    if not has_explicit_sort and not has_rank_language:
+        return []
+    if not has_explicit_sort and detect_aggregation(normalized) is not None:
+        return []
+
+    column = _find_metric_column(dataframe, normalized) or _find_column(
+        dataframe, normalized
+    )
+    if column is None:
+        return []
+
+    ascending = has_any_phrase(normalized, ("thap nhat", "lowest", "ascending"))
+    return [
+        _candidate(
+            "sort",
+            74,
+            _tool(
+                "sort_values",
+                {"column": column, "ascending": ascending, "limit": 10},
+                CONFIDENCE_SORT,
+            ),
+            evidence=2.5,
+        )
+    ]
+
+
+def _compare_group_candidates(
+    dataframe: pd.DataFrame, normalized: str
+) -> list[RouteCandidate]:
+    if not has_any_phrase(
+        normalized,
+        ("so sanh", "compare", "comparison", "khac biet", "chenh lech"),
+    ):
+        return []
+
+    metric_column = _find_metric_column(dataframe, normalized)
+    group_column = _find_group_column(
+        dataframe, normalized, exclude={metric_column} if metric_column else set()
+    )
+    if metric_column and group_column:
+        return [
+            _candidate(
+                "compare_groups",
+                76,
+                _tool(
+                    "compare_groups",
+                    {
+                        "metric_column": metric_column,
+                        "group_by": group_column,
+                        "operation": detect_aggregation(normalized) or "mean",
+                    },
+                    CONFIDENCE_COMPARE_GROUPS,
+                ),
+                evidence=3.0,
+            )
+        ]
+    return [
+        _candidate(
+            "compare_groups",
+            76,
+            _clarify("Ban muon so sanh metric numeric nao theo cot nhom nao?"),
         )
     ]
 
@@ -503,6 +672,24 @@ def _chart_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCan
     ]
 
 
+ROUTE_BUILDERS: tuple[RouteBuilder, ...] = (
+    lambda dataframe, normalized: _profile_candidates(normalized),
+    _percentage_candidates,
+    _correlation_candidates,
+    lambda dataframe, normalized: _missing_candidates(normalized),
+    lambda dataframe, normalized: _data_quality_candidates(normalized),
+    lambda dataframe, normalized: _list_column_candidates(normalized),
+    _distribution_candidates,
+    _outlier_candidates,
+    _describe_candidates,
+    _value_count_candidates,
+    _sort_candidates,
+    _compare_group_candidates,
+    _aggregate_candidates,
+    _chart_candidates,
+)
+
+
 def _filter_compatible_candidates(
     candidates: list[RouteCandidate], normalized: str
 ) -> list[RouteCandidate]:
@@ -521,13 +708,35 @@ def _filter_compatible_candidates(
         filtered = [
             candidate for candidate in filtered if candidate.intent != "list_columns"
         ]
+    if "data_quality" in intents:
+        filtered = [
+            candidate
+            for candidate in filtered
+            if candidate.intent not in {"list_columns", "missing"}
+        ]
     if "distribution" in intents:
         filtered = [
             candidate
             for candidate in filtered
             if candidate.intent not in {"chart", "describe"}
         ]
+    if "outlier" in intents:
+        filtered = [
+            candidate for candidate in filtered if candidate.intent != "describe"
+        ]
     if "percentage" in intents:
+        filtered = [
+            candidate
+            for candidate in filtered
+            if candidate.intent not in {"aggregate", "describe"}
+        ]
+    if "compare_groups" in intents:
+        filtered = [
+            candidate
+            for candidate in filtered
+            if candidate.intent not in {"aggregate", "describe"}
+        ]
+    if "sort" in intents and has_any_phrase(normalized, ("sap xep", "sort", "rank")):
         filtered = [
             candidate
             for candidate in filtered

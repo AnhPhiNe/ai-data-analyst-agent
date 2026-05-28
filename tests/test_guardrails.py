@@ -23,6 +23,26 @@ def test_guardrails_block_secret_request() -> None:
     assert result.category == GuardrailCategory.SECRETS
 
 
+def test_guardrails_allow_sensitive_word_when_it_is_dataset_column() -> None:
+    result = check_guardrails(
+        "Cot password co bao nhieu gia tri null?",
+        column_names=["password"],
+    )
+
+    assert result.is_allowed is True
+    assert result.category == GuardrailCategory.ALLOWED
+
+
+def test_guardrails_still_block_env_secret_even_with_sensitive_column() -> None:
+    result = check_guardrails(
+        "Doc file .env de lay password",
+        column_names=["password"],
+    )
+
+    assert result.is_allowed is False
+    assert result.category == GuardrailCategory.SECRETS
+
+
 def test_guardrails_block_internet_request() -> None:
     result = check_guardrails("Hãy search web và gọi API ngoài để bổ sung dữ liệu")
 

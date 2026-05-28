@@ -25,13 +25,15 @@ def repair_tool_column_arguments(
         _repair_column_key(dataframe, repaired, "column", expected_type="numeric")
     elif tool_name == "value_counts":
         _repair_column_key(dataframe, repaired, "column")
-    elif tool_name == "aggregate_metric":
+    elif tool_name in {"aggregate_metric", "compare_groups"}:
         _repair_column_key(
             dataframe, repaired, "metric_column", expected_type="numeric"
         )
         _repair_column_key(dataframe, repaired, "group_by", expected_type="categorical")
     elif tool_name == "sort_values":
         _repair_column_key(dataframe, repaired, "column")
+    elif tool_name == "outlier_detection":
+        _repair_column_key(dataframe, repaired, "column", expected_type="numeric")
     elif tool_name in {"filter_rows", "conditional_percentage"}:
         operator = str(repaired.get("operator", "")).lower()
         expected_type = "numeric" if operator in {"gt", "gte", "lt", "lte"} else None

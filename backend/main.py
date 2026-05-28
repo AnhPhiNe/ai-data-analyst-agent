@@ -40,6 +40,7 @@ rate_limiter = InMemoryRateLimiter(
     max_requests=settings.rate_limit_per_minute,
     window_seconds=settings.rate_limit_window_seconds,
 )
+allowed_origins = settings.cors_allowed_origins() or ["*"]
 
 app = FastAPI(
     title=settings.app_name,
@@ -49,8 +50,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials="*" not in allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -98,6 +98,32 @@ def test_profile_includes_distribution_specs() -> None:
     assert department_distribution["data"][0] == {"category": "Engineering", "count": 2}
 
 
+def test_profile_includes_column_metadata() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,joined_at,is_active,score,segment\n"
+        "u1,2026-01-01,true,80,A\n"
+        "u2,2026-01-02,false,90,B\n"
+        "u3,2026-01-03,true,85,A\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("metadata.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    payload = client.get(f"/datasets/{session_id}/profile").json()
+    metadata = {column["name"]: column for column in payload["column_metadata"]}
+
+    assert metadata["user_id"]["inferred_kind"] == "id_like"
+    assert metadata["joined_at"]["inferred_kind"] == "datetime_like"
+    assert metadata["is_active"]["inferred_kind"] == "boolean"
+    assert metadata["score"]["inferred_kind"] == "numeric"
+    assert metadata["segment"]["inferred_kind"] == "categorical"
+    assert metadata["segment"]["unique_count"] == 2
+    assert metadata["segment"]["sample_values"] == ["A", "B", "A"]
+
+
 def test_profile_returns_404_for_unknown_session() -> None:
     client = TestClient(app)
 

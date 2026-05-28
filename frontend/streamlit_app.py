@@ -21,13 +21,14 @@ from frontend.components import (  # noqa: E402
     render_data_explorer_tab,
     render_chat_tab,
 )
+from backend.services.dataset_loader import read_csv_content  # noqa: E402
 
 
 def parse_uploaded_dataframe(filename: str, content: bytes) -> pd.DataFrame:
     buffer = io.BytesIO(content)
     if filename.lower().endswith(".xlsx"):
         return pd.read_excel(buffer)
-    return pd.read_csv(buffer)
+    return read_csv_content(content)
 
 
 def clear_dataset_state() -> None:
@@ -294,7 +295,7 @@ with st.sidebar:
         <div style="text-align: center; margin-bottom: 25px; padding-top: 10px;">
             <div style="font-size: 48px; margin-bottom: 8px;">🤖</div>
             <div style="font-size: 20px; font-weight: 700; color: #0f172a; letter-spacing: -0.5px;">Data Agent Hub</div>
-            <div class="sidebar-badge">Production Hardened</div>
+            <div class="sidebar-badge">Portfolio MVP</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -361,7 +362,8 @@ if upload_clicked and uploaded_file is not None:
                 label="Dataset analysis failed.", state="error", expanded=True
             )
             st.error(
-                "Could not reach the backend. Start FastAPI first, then try again."
+                "Could not reach the backend. If this is a hosted demo, the API may "
+                "be waking up. Please wait a moment and try again."
             )
         else:
             payload = response.json()
@@ -415,7 +417,9 @@ if upload_clicked and uploaded_file is not None:
                     expanded=True,
                 )
                 st.error(
-                    "Dataset upload reached the backend, but profile/suggestions could not be loaded."
+                    "Dataset upload reached the backend, but profile/suggestions "
+                    "could not be loaded. The API may have restarted or gone cold; "
+                    "please try the upload again."
                 )
             else:
                 status_box.update(

@@ -119,7 +119,11 @@ BLOCKED_PATTERNS: list[tuple[GuardrailCategory, tuple[str, ...], str]] = [
 ]
 
 
-def check_guardrails(question: str) -> GuardrailResult:
+def check_guardrails(
+    question: str, column_names: list[str] | tuple[str, ...] | None = None
+) -> GuardrailResult:
+    normalized_columns = _normalized_column_names(column_names or [])
+
     # 1. Raw signature check for special strings (eval(, exec(, path prefixes, etc.)
     raw_lower = question.lower()
     for category, patterns, message in BLOCKED_PATTERNS:
@@ -127,6 +131,10 @@ def check_guardrails(question: str) -> GuardrailResult:
             # If pattern contains special characters, check raw substring
             if any(char in pattern for char in ("(", "/", "\\", ".")):
                 if pattern in raw_lower:
+                    if _is_allowed_column_analysis(
+                        category, pattern, question, normalized_columns
+                    ):
+                        continue
                     return GuardrailResult(
                         is_allowed=False, category=category, message=message
                     )
@@ -146,6 +154,10 @@ def check_guardrails(question: str) -> GuardrailResult:
             if not norm_pattern:
                 continue
             if re.search(rf"(?<!\w){re.escape(norm_pattern)}(?!\w)", normalized):
+                if _is_allowed_column_analysis(
+                    category, norm_pattern, question, normalized_columns
+                ):
+                    continue
                 return GuardrailResult(
                     is_allowed=False, category=category, message=message
                 )
@@ -155,3 +167,53 @@ def check_guardrails(question: str) -> GuardrailResult:
         category=GuardrailCategory.ALLOWED,
         message="Request is allowed.",
     )
+
+
+def _normalized_column_names(column_names: list[str] | tuple[str, ...]) -> set[str]:
+    return {
+        normalized
+        for column in column_names
+        if (normalized := normalize_text(str(column)))
+    }
+
+
+def _is_allowed_column_analysis(
+    category: GuardrailCategory,
+    matched_pattern: str,
+    question: str,
+    normalized_columns: set[str],
+) -> bool:
+    if category != GuardrailCategory.SECRETS or not normalized_columns:
+        return False
+
+    normalized_pattern = normalize_text(matched_pattern)
+    if normalized_pattern not in normalized_columns:
+        return False
+
+    normalized_question = normalize_text(question)
+    if not re.search(
+        rf"(?<!\w){re.escape(normalized_pattern)}(?!\w)", normalized_question
+    ):
+        return False
+
+    analysis_phrases = (
+        "cot",
+        "column",
+        "gia tri thieu",
+        "missing",
+        "null",
+        "bao nhieu",
+        "dem",
+        "count",
+        "top",
+        "phan phoi",
+        "distribution",
+        "ty le",
+        "ti le",
+        "percentage",
+        "trung binh",
+        "average",
+        "mean",
+        "value counts",
+    )
+    return any(phrase in normalized_question for phrase in analysis_phrases)

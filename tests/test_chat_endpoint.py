@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
+import backend.agent.orchestrator as orchestrator_module
 import backend.main as main_module
+from backend.agent.gemini_runtime import GeminiRuntimeResult
 from backend.main import app
 from backend.services.session_store import session_store
 
@@ -40,6 +42,26 @@ def test_chat_query_routes_simple_question_without_gemini() -> None:
     assert payload["answer"] == "Dữ liệu hiện có 4 dòng và 5 cột."
     assert payload["tool_trace"][-1]["tool_name"] == "profile_dataset"
     assert session_store.get(session_id).chat_history[-1]["route"] == "router_tool"
+
+
+def test_chat_query_routes_distinct_value_count_without_gemini() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Co bao nhieu phong ban khac nhau trong du lieu?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "Cột department có 3 giá trị khác nhau" in payload["answer"]
+    assert payload["tool_trace"][-1]["tool_name"] == "value_counts"
+    assert not any(trace["source"] == "gemini" for trace in payload["tool_trace"])
 
 
 def test_chat_query_returns_table_for_aggregate() -> None:
@@ -549,6 +571,38 @@ def test_chat_query_returns_404_for_unknown_session() -> None:
     assert response.json()["detail"] == "Dataset session not found."
 
 
+def test_chat_query_requires_session_token_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    monkeypatch.setattr(main_module.settings, "require_session_token", True)
+    csv_content = b"department,salary\nEngineering,1200\nSales,900\n"
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("hr.csv", csv_content, "text/csv")},
+    )
+    payload = upload.json()
+
+    missing_token = client.post(
+        "/chat/query",
+        json={
+            "session_id": payload["session_id"],
+            "question": "Dataset co bao nhieu dong?",
+        },
+    )
+    valid_token = client.post(
+        "/chat/query",
+        json={
+            "session_id": payload["session_id"],
+            "question": "Dataset co bao nhieu dong?",
+        },
+        headers={"X-Session-Token": payload["session_token"]},
+    )
+
+    assert missing_token.status_code == 403
+    assert valid_token.status_code == 200
+
+
 def test_chat_query_uses_mock_gemini_when_router_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -698,6 +752,73 @@ def test_chat_query_repairs_vietnamese_column_args_for_aggregate_tool(
     )
     assert validation_trace["arguments"]["metric_column"] == "performance_score"
     assert validation_trace["arguments"]["group_by"] == "department"
+
+
+def test_chat_query_retries_once_after_gemini_validation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: FakeProvider())
+    monkeypatch.setattr(
+        orchestrator_module,
+        "choose_tool_with_gemini",
+        lambda **kwargs: GeminiRuntimeResult(
+            status="tool_call",
+            message="Gemini selected a tool call.",
+            confidence=0.91,
+            tool_name="value_counts",
+            arguments={"column": "department", "top_n": "2"},
+        ),
+    )
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "value_counts"
+    assert payload["table"][0] == {"value": "Engineering", "count": 2, "percent": 50.0}
+    assert any(trace["source"] == "agent_repair" for trace in payload["tool_trace"])
+    validation_traces = [
+        trace for trace in payload["tool_trace"] if trace["source"] == "tool_validation"
+    ]
+    assert [trace["status"] for trace in validation_traces] == ["error", "success"]
+
+
+def test_chat_query_does_not_execute_when_gemini_retry_cannot_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: FakeProvider())
+    monkeypatch.setattr(
+        orchestrator_module,
+        "choose_tool_with_gemini",
+        lambda **kwargs: GeminiRuntimeResult(
+            status="tool_call",
+            message="Gemini selected a tool call.",
+            confidence=0.91,
+            tool_name="value_counts",
+            arguments={"column": "unknown_column", "top_n": 2},
+        ),
+    )
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Co insight gi thu vi khong?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "clarification"
+    assert payload["should_clarify"] is True
+    assert not any(
+        trace["source"] == "tool_executor" for trace in payload["tool_trace"]
+    )
 
 
 def test_chat_query_repairs_vietnamese_column_args_for_chart_tool(

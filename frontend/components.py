@@ -321,7 +321,10 @@ def render_chat_tab(
                 assistant_message = {
                     "id": len(st.session_state.chat_messages),
                     "role": "assistant",
-                    "content": "Could not reach the backend.",
+                    "content": (
+                        "Could not reach the backend. If this is a hosted demo, "
+                        "the API may be waking up. Please wait a moment and retry."
+                    ),
                 }
             except RuntimeError as exc:
                 status_box.update(

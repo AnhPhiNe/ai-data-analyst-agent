@@ -1,19 +1,19 @@
 services:
   - type: web
-    name: ai-data-analyst-agent
+    name: ai-data-analyst-agent-api
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: python scripts/start_demo.py
-    healthCheckPath: /_stcore/health
+    dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
-      - key: BACKEND_URL
-        value: http://127.0.0.1:8000
       - key: GEMINI_MODEL
         value: gemini-2.5-flash-lite
       - key: GEMINI_API_KEY
         sync: false
+      - key: ALLOWED_ORIGINS
+        value: ""
       - key: MAX_UPLOAD_MB
         value: "10"
       - key: MAX_ROWS

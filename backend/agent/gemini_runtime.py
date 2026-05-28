@@ -280,6 +280,12 @@ def _generate_structured_with_retry(
                 raise
             sleep_fn(0.25 * (2**attempt))
             attempt += 1
+        except LLMRuntimeError as exc:
+            if _is_structured_schema_error(exc):
+                return _generate_with_retry(
+                    provider, prompt, sleep_fn=sleep_fn, max_retries=max_retries
+                )
+            raise
 
 
 def _extract_json_object(raw_response: str) -> str:
@@ -302,3 +308,8 @@ def _is_retryable_exception(exc: Exception) -> bool:
         token in text
         for token in ("429", "503", "timeout", "temporarily", "unavailable")
     )
+
+
+def _is_structured_schema_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "additionalproperties" in text or "response_schema" in text

@@ -176,6 +176,114 @@ def detect_missing_values_tool(
     )
 
 
+def data_quality_report_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
+    row_count = int(len(dataframe))
+    column_count = int(len(dataframe.columns))
+    duplicate_rows = int(dataframe.duplicated().sum())
+    table: list[dict[str, Any]] = []
+
+    missing_columns = []
+    constant_columns = []
+    high_cardinality_columns = []
+    possible_id_columns = []
+
+    for column in dataframe.columns:
+        column_name = str(column)
+        series = dataframe[column]
+        non_null_count = int(series.notna().sum())
+        missing_count = int(series.isna().sum())
+        missing_percent = round(
+            (missing_count / row_count * 100) if row_count else 0.0, 2
+        )
+        unique_count = int(series.dropna().nunique())
+        unique_ratio = round(
+            (unique_count / non_null_count) if non_null_count else 0.0, 4
+        )
+
+        if missing_count > 0:
+            missing_columns.append(column_name)
+            table.append(
+                {
+                    "check": "missing_values",
+                    "column": column_name,
+                    "count": missing_count,
+                    "percent": missing_percent,
+                    "detail": f"{missing_count} missing value(s)",
+                }
+            )
+
+        if non_null_count > 0 and unique_count <= 1:
+            constant_columns.append(column_name)
+            table.append(
+                {
+                    "check": "constant_column",
+                    "column": column_name,
+                    "count": unique_count,
+                    "percent": 100.0,
+                    "detail": "Only one distinct non-null value",
+                }
+            )
+
+        if _is_high_cardinality(series, unique_count, non_null_count):
+            high_cardinality_columns.append(column_name)
+            table.append(
+                {
+                    "check": "high_cardinality",
+                    "column": column_name,
+                    "count": unique_count,
+                    "percent": round(unique_ratio * 100, 2),
+                    "detail": "Many distinct values for a categorical-like column",
+                }
+            )
+
+        if _is_possible_id_column(column_name, unique_count, non_null_count):
+            possible_id_columns.append(column_name)
+            table.append(
+                {
+                    "check": "possible_id_column",
+                    "column": column_name,
+                    "count": unique_count,
+                    "percent": round(unique_ratio * 100, 2),
+                    "detail": "Column name or uniqueness ratio looks ID-like",
+                }
+            )
+
+    if duplicate_rows > 0:
+        table.insert(
+            0,
+            {
+                "check": "duplicate_rows",
+                "column": None,
+                "count": duplicate_rows,
+                "percent": round(
+                    (duplicate_rows / row_count * 100) if row_count else 0.0, 2
+                ),
+                "detail": "Fully duplicated row(s)",
+            },
+        )
+
+    summary = {
+        "rows": row_count,
+        "columns": column_count,
+        "duplicate_rows": duplicate_rows,
+        "missing_columns": missing_columns,
+        "constant_columns": constant_columns,
+        "high_cardinality_columns": high_cardinality_columns,
+        "possible_id_columns": possible_id_columns,
+        "issue_count": len(table),
+    }
+
+    return ToolResult(
+        tool_name="data_quality_report",
+        status="success",
+        message=f"Found {len(table)} data quality signal(s).",
+        data=summary,
+        table=table,
+    )
+
+
 def value_counts_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
     column = _required_string(arguments, "column")
     _require_column(dataframe, column)
@@ -196,6 +304,12 @@ def value_counts_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Too
         tool_name="value_counts",
         status="success",
         message=f"Computed top {len(table)} values for '{column}'.",
+        data={
+            "column": column,
+            "unique_count": int(dataframe[column].dropna().astype(str).nunique()),
+            "non_null_count": total,
+            "top_n": top_n,
+        },
         table=table,
     )
 
@@ -235,6 +349,62 @@ def aggregate_metric_tool(
     )
 
 
+def compare_groups_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
+    metric_column = _required_string(arguments, "metric_column")
+    group_by = _required_string(arguments, "group_by")
+    operation = str(arguments.get("operation", "mean")).lower()
+    limit = _bounded_int(
+        arguments.get("limit", 20), "limit", min_value=1, max_value=100
+    )
+
+    _require_column(dataframe, metric_column)
+    _require_column(dataframe, group_by)
+    _require_numeric(dataframe, metric_column)
+
+    if operation not in {"mean", "median", "min", "max", "count"}:
+        raise ToolValidationError(f"Unsupported comparison operation '{operation}'.")
+
+    grouped = (
+        dataframe.groupby(group_by, dropna=False)[metric_column]
+        .agg(["count", "mean", "median", "min", "max"])
+        .reset_index()
+    )
+    overall_mean = dataframe[metric_column].mean()
+    grouped["diff_from_overall_mean"] = grouped["mean"] - overall_mean
+
+    rename_map = {
+        "count": "count",
+        "mean": f"mean_{metric_column}",
+        "median": f"median_{metric_column}",
+        "min": f"min_{metric_column}",
+        "max": f"max_{metric_column}",
+    }
+    grouped = grouped.rename(columns=rename_map)
+    sort_column = rename_map.get(operation, f"mean_{metric_column}")
+    grouped = grouped.sort_values(sort_column, ascending=False).head(limit)
+
+    rounded = grouped.copy()
+    for column in rounded.columns:
+        if column != group_by and is_numeric_dtype(rounded[column]):
+            rounded[column] = rounded[column].map(_round)
+
+    return ToolResult(
+        tool_name="compare_groups",
+        status="success",
+        message=f"Compared '{metric_column}' across groups in '{group_by}'.",
+        data={
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "operation": operation,
+            "overall_mean": _round(overall_mean),
+            "groups_returned": int(len(rounded)),
+        },
+        table=_records(rounded),
+    )
+
+
 def sort_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> ToolResult:
     column = _required_string(arguments, "column")
     _require_column(dataframe, column)
@@ -251,6 +421,57 @@ def sort_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
         status="success",
         message=f"Sorted rows by '{column}'.",
         table=_records(sorted_frame),
+    )
+
+
+def outlier_detection_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
+    column = _required_string(arguments, "column")
+    limit = _bounded_int(
+        arguments.get("limit", 20), "limit", min_value=1, max_value=100
+    )
+
+    _require_column(dataframe, column)
+    _require_numeric(dataframe, column)
+
+    series = dataframe[column].dropna()
+    if series.empty:
+        raise ToolValidationError(f"Column '{column}' has no valid numeric values.")
+
+    q1 = float(series.quantile(0.25))
+    q3 = float(series.quantile(0.75))
+    iqr = q3 - q1
+    lower_bound = q1 - (1.5 * iqr)
+    upper_bound = q3 + (1.5 * iqr)
+    mask = dataframe[column].notna() & (
+        (dataframe[column] < lower_bound) | (dataframe[column] > upper_bound)
+    )
+    outliers = dataframe.loc[mask].head(limit).copy()
+    outliers.insert(0, "row_index", outliers.index)
+
+    outlier_count = int(mask.sum())
+    valid_count = int(series.count())
+    return ToolResult(
+        tool_name="outlier_detection",
+        status="success",
+        message=f"Detected {outlier_count} outlier row(s) in '{column}' using IQR.",
+        data={
+            "column": column,
+            "method": "iqr",
+            "q1": _round(q1),
+            "q3": _round(q3),
+            "iqr": _round(iqr),
+            "lower_bound": _round(lower_bound),
+            "upper_bound": _round(upper_bound),
+            "outlier_count": outlier_count,
+            "valid_count": valid_count,
+            "outlier_percent": round(
+                (outlier_count / valid_count * 100) if valid_count else 0.0, 2
+            ),
+            "returned_rows": int(len(outliers)),
+        },
+        table=_records(outliers),
     )
 
 
@@ -423,6 +644,31 @@ def _condition_label(column: str, operator: str, value: Any) -> str:
     return f"{column} {symbol} {value}"
 
 
+def _is_high_cardinality(
+    series: pd.Series, unique_count: int, non_null_count: int
+) -> bool:
+    if non_null_count < 20:
+        return False
+    if is_numeric_dtype(series) and not is_bool_dtype(series):
+        return False
+    unique_ratio = unique_count / non_null_count if non_null_count else 0.0
+    return unique_count >= 20 and unique_ratio >= 0.5
+
+
+def _is_possible_id_column(
+    column_name: str, unique_count: int, non_null_count: int
+) -> bool:
+    if non_null_count == 0:
+        return False
+    normalized_name = column_name.lower().replace("-", "_").replace(" ", "_")
+    unique_ratio = unique_count / non_null_count
+    return (
+        normalized_name == "id"
+        or normalized_name.endswith("_id")
+        or (non_null_count >= 20 and unique_ratio >= 0.95)
+    )
+
+
 def _validate_safe_arguments(arguments: dict[str, Any]) -> None:
     for key, value in arguments.items():
         if key.lower() in DANGEROUS_ARG_KEYS or key.startswith("__"):
@@ -494,6 +740,11 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         "Calculate missing values for every column.",
         detect_missing_values_tool,
     ),
+    "data_quality_report": ToolDefinition(
+        "data_quality_report",
+        "Report missing values, duplicates, constant columns, high-cardinality columns, and possible ID columns.",
+        data_quality_report_tool,
+    ),
     "value_counts": ToolDefinition(
         "value_counts", "Return top values for a column.", value_counts_tool
     ),
@@ -502,8 +753,18 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         "Aggregate a numeric metric by a group column.",
         aggregate_metric_tool,
     ),
+    "compare_groups": ToolDefinition(
+        "compare_groups",
+        "Compare numeric metric statistics across groups.",
+        compare_groups_tool,
+    ),
     "sort_values": ToolDefinition(
         "sort_values", "Sort rows by a column.", sort_values_tool
+    ),
+    "outlier_detection": ToolDefinition(
+        "outlier_detection",
+        "Detect numeric outliers using the IQR method.",
+        outlier_detection_tool,
     ),
     "filter_rows": ToolDefinition(
         "filter_rows", "Filter rows using a safe operator.", filter_rows_tool

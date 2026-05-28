@@ -50,7 +50,12 @@ def _validate_tool_specific_arguments(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    if tool_name in {"list_columns", "profile_dataset", "detect_missing_values"}:
+    if tool_name in {
+        "list_columns",
+        "profile_dataset",
+        "detect_missing_values",
+        "data_quality_report",
+    }:
         return {}
 
     if tool_name == "describe_numeric":
@@ -88,6 +93,22 @@ def _validate_tool_specific_arguments(
             "limit": _bounded_int(arguments.get("limit", 20), "limit", 1, 100),
         }
 
+    if tool_name == "compare_groups":
+        metric_column = _required_string(arguments, "metric_column")
+        group_by = _required_string(arguments, "group_by")
+        operation = str(arguments.get("operation", "mean")).lower()
+        _require_column(dataframe, metric_column)
+        _require_column(dataframe, group_by)
+        _require_numeric(dataframe, metric_column)
+        if operation not in {"mean", "median", "min", "max", "count"}:
+            raise ValueError(f"Unsupported comparison operation '{operation}'.")
+        return {
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "operation": operation,
+            "limit": _bounded_int(arguments.get("limit", 20), "limit", 1, 100),
+        }
+
     if tool_name == "sort_values":
         column = _required_string(arguments, "column")
         _require_column(dataframe, column)
@@ -95,6 +116,15 @@ def _validate_tool_specific_arguments(
             "column": column,
             "ascending": bool(arguments.get("ascending", False)),
             "limit": _bounded_int(arguments.get("limit", 10), "limit", 1, 100),
+        }
+
+    if tool_name == "outlier_detection":
+        column = _required_string(arguments, "column")
+        _require_column(dataframe, column)
+        _require_numeric(dataframe, column)
+        return {
+            "column": column,
+            "limit": _bounded_int(arguments.get("limit", 20), "limit", 1, 100),
         }
 
     if tool_name == "filter_rows":

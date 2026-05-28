@@ -24,6 +24,15 @@ class ColumnProfile(BaseModel):
     missing_percent: float
 
 
+class ColumnMetadata(BaseModel):
+    name: str
+    dtype: str
+    missing_percent: float
+    unique_count: int
+    sample_values: list[object]
+    inferred_kind: str
+
+
 class NumericSummary(BaseModel):
     column: str
     count: int
@@ -63,6 +72,7 @@ class DatasetProfileResponse(BaseModel):
     column_names: list[str]
     preview: list[dict[str, object]]
     dtypes: list[ColumnProfile]
+    column_metadata: list[ColumnMetadata]
     missing_values: list[ColumnProfile]
     numeric_summary: list[NumericSummary]
     top_categories: list[TopCategory]

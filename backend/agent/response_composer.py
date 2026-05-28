@@ -31,8 +31,25 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
         )
         return f"Dữ liệu có giá trị thiếu ở các cột sau: {details}."
 
+    if tool_result.tool_name == "data_quality_report" and isinstance(
+        tool_result.data, dict
+    ):
+        return _data_quality_answer(tool_result.data)
+
     if tool_result.tool_name == "describe_numeric":
         answer = _describe_numeric_answer(question, tool_result.table or [])
+        if answer:
+            return answer
+
+    if tool_result.tool_name == "outlier_detection" and isinstance(
+        tool_result.data, dict
+    ):
+        return _outlier_answer(tool_result.data)
+
+    if tool_result.tool_name == "value_counts" and isinstance(tool_result.data, dict):
+        answer = _value_counts_answer(
+            question, tool_result.data, tool_result.table or []
+        )
         if answer:
             return answer
 
@@ -60,6 +77,11 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
 
     if tool_result.tool_name == "aggregate_metric":
         answer = _aggregate_metric_answer(tool_result.table or [])
+        if answer:
+            return answer
+
+    if tool_result.tool_name == "compare_groups":
+        answer = _compare_groups_answer(tool_result.table or [], tool_result.data)
         if answer:
             return answer
 
@@ -158,6 +180,110 @@ def _aggregate_metric_answer(table: list[dict[str, Any]]) -> str | None:
         for row in table[:5]
     )
     return f"{metric_column} {operation_label} theo {group_column}: {details}."
+
+
+def _data_quality_answer(data: dict[str, Any]) -> str:
+    issue_count = int(data.get("issue_count", 0) or 0)
+    duplicate_rows = int(data.get("duplicate_rows", 0) or 0)
+    missing_columns = data.get("missing_columns") or []
+    constant_columns = data.get("constant_columns") or []
+    high_cardinality_columns = data.get("high_cardinality_columns") or []
+    possible_id_columns = data.get("possible_id_columns") or []
+
+    if issue_count == 0:
+        return "Không phát hiện tín hiệu chất lượng dữ liệu đáng chú ý trong dataset."
+
+    parts = []
+    if duplicate_rows:
+        parts.append(f"{_format_number(duplicate_rows)} dòng trùng lặp")
+    if missing_columns:
+        parts.append(
+            "thiếu dữ liệu ở "
+            + ", ".join(str(column) for column in missing_columns[:5])
+        )
+    if constant_columns:
+        parts.append(
+            "cột hằng số: " + ", ".join(str(column) for column in constant_columns[:5])
+        )
+    if high_cardinality_columns:
+        parts.append(
+            "cột high-cardinality: "
+            + ", ".join(str(column) for column in high_cardinality_columns[:5])
+        )
+    if possible_id_columns:
+        parts.append(
+            "cột có vẻ là ID: "
+            + ", ".join(str(column) for column in possible_id_columns[:5])
+        )
+    return "Phát hiện các tín hiệu chất lượng dữ liệu: " + "; ".join(parts) + "."
+
+
+def _outlier_answer(data: dict[str, Any]) -> str:
+    column = data.get("column")
+    outlier_count = data.get("outlier_count")
+    valid_count = data.get("valid_count")
+    outlier_percent = data.get("outlier_percent")
+    lower_bound = data.get("lower_bound")
+    upper_bound = data.get("upper_bound")
+    if int(outlier_count or 0) == 0:
+        return (
+            f"Không phát hiện outlier trong {column} theo IQR "
+            f"(ngưỡng {_format_number(lower_bound)} đến {_format_number(upper_bound)})."
+        )
+    return (
+        f"Phát hiện {_format_number(outlier_count)} / {_format_number(valid_count)} "
+        f"giá trị outlier trong {column} theo IQR "
+        f"({_format_number(outlier_percent)}%). Ngưỡng hợp lệ xấp xỉ "
+        f"{_format_number(lower_bound)} đến {_format_number(upper_bound)}."
+    )
+
+
+def _value_counts_answer(
+    question: str, data: dict[str, Any], table: list[dict[str, Any]]
+) -> str | None:
+    column = data.get("column")
+    unique_count = data.get("unique_count")
+    non_null_count = data.get("non_null_count")
+    normalized = _normalize_answer_text(question)
+    if any(
+        token in normalized
+        for token in (
+            "khac nhau",
+            "distinct",
+            "unique",
+            "gia tri rieng",
+            "so luong gia tri",
+        )
+    ):
+        return (
+            f"Cột {column} có {_format_number(unique_count)} giá trị khác nhau "
+            f"trên {_format_number(non_null_count)} giá trị hợp lệ."
+        )
+    if table:
+        first = table[0]
+        return (
+            f"Giá trị phổ biến nhất trong {column} là {first.get('value')} "
+            f"({_format_number(first.get('count'))} dòng, {_format_number(first.get('percent'))}%)."
+        )
+    return None
+
+
+def _compare_groups_answer(
+    table: list[dict[str, Any]], data: dict[str, Any] | list[Any] | None
+) -> str | None:
+    if not table or not isinstance(data, dict):
+        return None
+    metric_column = str(data.get("metric_column"))
+    group_by = str(data.get("group_by"))
+    mean_column = f"mean_{metric_column}"
+    if mean_column not in table[0]:
+        return None
+    details = ", ".join(
+        f"{row.get(group_by)}: mean={_format_number(row.get(mean_column))}, "
+        f"n={_format_number(row.get('count'))}"
+        for row in table[:5]
+    )
+    return f"So sánh {metric_column} theo {group_by}: {details}."
 
 
 def _describe_numeric_answer(question: str, table: list[dict[str, Any]]) -> str | None:

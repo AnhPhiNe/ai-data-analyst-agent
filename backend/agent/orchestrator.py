@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from typing import Any
 
+import pandas as pd
+
 from backend.agent.clarification_memory import (
     column_options,
     set_pending_from_question,
@@ -8,6 +10,7 @@ from backend.agent.clarification_memory import (
     try_resolve_pending_clarification,
 )
 from backend.agent.column_argument_repair import repair_tool_column_arguments
+from backend.agent.column_resolver import normalize_text, resolve_column
 from backend.agent.correlation_helpers import (
     correlation_target_issue,
     find_mentioned_numeric_column,
@@ -28,6 +31,7 @@ from backend.services.session_store import DatasetSession, session_store
 from backend.tools.safe_pandas import execute_tool
 
 TraceCallback = Callable[[ToolTraceItem], None]
+MAX_GEMINI_VALIDATION_REPAIR_ATTEMPTS = 1
 
 
 def run_agent_turn(
@@ -38,7 +42,9 @@ def run_agent_turn(
 ) -> ChatResponse:
     traces: list[ToolTraceItem] = []
 
-    guardrail = check_guardrails(question)
+    guardrail = check_guardrails(
+        question, column_names=[str(column) for column in session.dataframe.columns]
+    )
     if not guardrail.is_allowed:
         guardrail_trace = ToolTraceItem(
             source="guardrails",
@@ -256,6 +262,42 @@ def execute_validated_tool(
         ),
         event_callback,
     )
+    if (
+        not validation.is_valid
+        and source == "gemini"
+        and MAX_GEMINI_VALIDATION_REPAIR_ATTEMPTS > 0
+    ):
+        repaired_arguments = _repair_after_validation_failure(
+            session.dataframe, question, tool_name, arguments, validation.message
+        )
+        if repaired_arguments != arguments:
+            _record_trace(
+                traces,
+                ToolTraceItem(
+                    source="agent_repair",
+                    tool_name=tool_name,
+                    arguments=repaired_arguments,
+                    status="success",
+                    message=(
+                        "Retried Gemini-selected tool call once after fixing "
+                        "a validation issue."
+                    ),
+                ),
+                event_callback,
+            )
+            arguments = repaired_arguments
+            validation = validate_tool_call(session.dataframe, tool_name, arguments)
+            _record_trace(
+                traces,
+                ToolTraceItem(
+                    source="tool_validation",
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    status="success" if validation.is_valid else "error",
+                    message=validation.message,
+                ),
+                event_callback,
+            )
     if not validation.is_valid:
         response = clarification_response(
             session.session_id,
@@ -282,12 +324,11 @@ def execute_validated_tool(
         ),
         event_callback,
     )
-
     if tool_result.status == "error":
         session_store.clear_pending_clarification(session.session_id)
         return ChatResponse(
             session_id=session.session_id,
-            answer=f"Mình chưa thể hoàn tất phân tích này: {tool_result.message}",
+            answer=f"Could not complete this analysis: {tool_result.message}",
             response_type="error",
             tool_trace=traces,
         )
@@ -304,6 +345,124 @@ def execute_validated_tool(
     )
 
 
+def _repair_after_validation_failure(
+    dataframe: pd.DataFrame,
+    question: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    validation_message: str,
+) -> dict[str, Any]:
+    if "not allowed" in validation_message or not isinstance(arguments, dict):
+        return arguments
+
+    repaired = dict(arguments)
+    _coerce_integer_argument(repaired, "top_n")
+    _coerce_integer_argument(repaired, "limit")
+    _coerce_integer_argument(repaired, "bins")
+    _normalize_operation_argument(repaired)
+    _normalize_operator_argument(repaired)
+
+    if "does not exist" in validation_message:
+        _repair_missing_column_from_question(dataframe, question, tool_name, repaired)
+
+    return repaired
+
+
+def _coerce_integer_argument(arguments: dict[str, Any], key: str) -> None:
+    value = arguments.get(key)
+    if isinstance(value, str) and value.strip().isdigit():
+        arguments[key] = int(value.strip())
+
+
+def _normalize_operation_argument(arguments: dict[str, Any]) -> None:
+    value = arguments.get("operation")
+    if not isinstance(value, str):
+        return
+    operation_aliases = {
+        "avg": "mean",
+        "average": "mean",
+        "trung binh": "mean",
+        "mean": "mean",
+        "tong": "sum",
+        "sum": "sum",
+        "min": "min",
+        "max": "max",
+        "median": "median",
+        "count": "count",
+    }
+    normalized = normalize_text(value)
+    if normalized in operation_aliases:
+        arguments["operation"] = operation_aliases[normalized]
+
+
+def _normalize_operator_argument(arguments: dict[str, Any]) -> None:
+    value = arguments.get("operator")
+    if not isinstance(value, str):
+        return
+    operator_aliases = {
+        ">": "gt",
+        ">=": "gte",
+        "<": "lt",
+        "<=": "lte",
+        "=": "eq",
+        "==": "eq",
+        "gt": "gt",
+        "greater than": "gt",
+        "lon hon": "gt",
+        "gte": "gte",
+        "greater or equal": "gte",
+        "lt": "lt",
+        "less than": "lt",
+        "duoi": "lt",
+        "nho hon": "lt",
+        "lte": "lte",
+        "less or equal": "lte",
+        "eq": "eq",
+        "bang": "eq",
+        "ne": "ne",
+        "khac": "ne",
+        "contains": "contains",
+        "chua": "contains",
+    }
+    normalized = normalize_text(value)
+    if value in operator_aliases:
+        arguments["operator"] = operator_aliases[value]
+    elif normalized in operator_aliases:
+        arguments["operator"] = operator_aliases[normalized]
+
+
+def _repair_missing_column_from_question(
+    dataframe: pd.DataFrame,
+    question: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> None:
+    column_expectations = {
+        "describe_numeric": {"column": "numeric"},
+        "value_counts": {"column": None},
+        "outlier_detection": {"column": "numeric"},
+        "aggregate_metric": {
+            "metric_column": "numeric",
+            "group_by": "categorical",
+        },
+        "compare_groups": {
+            "metric_column": "numeric",
+            "group_by": "categorical",
+        },
+        "sort_values": {"column": None},
+        "filter_rows": {"column": None},
+        "conditional_percentage": {"column": None},
+        "generate_chart_spec": {"x": None, "y": "numeric", "names": None},
+    }
+    for key, expected_type in column_expectations.get(tool_name, {}).items():
+        value = arguments.get(key)
+        if not isinstance(value, str) or value in dataframe.columns:
+            continue
+        resolved = resolve_column(dataframe, question, expected_type=expected_type)
+        if resolved is not None:
+            arguments[key] = resolved
+
+
 def _safe_profile_summary(session: DatasetSession) -> dict[str, Any]:
     cached_profile = session.profile_cache
     profile = (
@@ -316,6 +475,7 @@ def _safe_profile_summary(session: DatasetSession) -> dict[str, Any]:
         "columns": profile["columns"],
         "column_names": profile["column_names"],
         "dtypes": profile["dtypes"],
+        "column_metadata": profile["column_metadata"],
         "missing_values": profile["missing_values"],
         "numeric_summary": profile["numeric_summary"],
     }

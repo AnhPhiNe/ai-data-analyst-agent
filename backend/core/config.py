@@ -20,10 +20,18 @@ class Settings(BaseSettings):
     max_sessions: int = Field(default=25, alias="MAX_SESSIONS")
     session_ttl_seconds: int = Field(default=3600, alias="SESSION_TTL_SECONDS")
     require_session_token: bool = Field(default=False, alias="REQUIRE_SESSION_TOKEN")
+    allowed_origins: str = Field(default="", alias="ALLOWED_ORIGINS")
     rate_limit_per_minute: int = Field(default=300, alias="RATE_LIMIT_PER_MINUTE")
     rate_limit_window_seconds: int = Field(
         default=60, alias="RATE_LIMIT_WINDOW_SECONDS"
     )
+
+    def cors_allowed_origins(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.allowed_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache
