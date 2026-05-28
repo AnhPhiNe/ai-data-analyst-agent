@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = Field(
         default=60, alias="RATE_LIMIT_WINDOW_SECONDS"
     )
+    max_planner_validation_retries: int = Field(
+        default=1, alias="MAX_PLANNER_VALIDATION_RETRIES"
+    )
 
     def cors_allowed_origins(self) -> list[str]:
         return [

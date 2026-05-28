@@ -29,8 +29,11 @@ class ColumnMetadata(BaseModel):
     dtype: str
     missing_percent: float
     unique_count: int
+    unique_ratio: float
     sample_values: list[object]
     inferred_kind: str
+    analysis_role: str
+    semantic_aliases: list[str]
 
 
 class NumericSummary(BaseModel):

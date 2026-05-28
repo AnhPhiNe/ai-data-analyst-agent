@@ -46,6 +46,7 @@ class GeminiRuntimeResult:
     tool_name: str | None = None
     arguments: dict[str, Any] | None = None
     raw_response: str | None = None
+    validation_retry_count: int = 0
 
 
 class GeminiProvider:
@@ -111,6 +112,7 @@ def choose_tool_with_gemini(
     profile_summary: dict[str, Any] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_retries: int = 2,
+    max_validation_retries: int = 1,
 ) -> GeminiRuntimeResult:
     prompt = build_tool_selection_prompt(dataframe, question, profile_summary)
 
@@ -123,6 +125,7 @@ def choose_tool_with_gemini(
             max_retries=max_retries,
         )
         selection = parse_tool_selection_response(raw_response)
+        retry_count = 0
     except TransientLLMError:
         return GeminiRuntimeResult(
             status="error",
@@ -162,21 +165,74 @@ def choose_tool_with_gemini(
         dataframe, selection.tool_name, selection.arguments
     )
     validation = validate_tool_call(dataframe, selection.tool_name, repaired_arguments)
+
+    while not validation.is_valid and retry_count < max_validation_retries:
+        retry_count += 1
+        retry_prompt = build_tool_selection_retry_prompt(
+            dataframe=dataframe,
+            question=question,
+            profile_summary=profile_summary,
+            previous_selection=selection,
+            validation_message=validation.message,
+        )
+        try:
+            raw_response = _generate_structured_with_retry(
+                provider,
+                retry_prompt,
+                AgentToolSelection,
+                sleep_fn=sleep_fn,
+                max_retries=max_retries,
+            )
+            selection = parse_tool_selection_response(raw_response)
+        except TransientLLMError:
+            return GeminiRuntimeResult(
+                status="error",
+                message="Gemini đang tạm thời quá tải. Vui lòng thử lại sau.",
+                validation_retry_count=retry_count,
+            )
+        except (LLMRuntimeError, ValueError) as exc:
+            return GeminiRuntimeResult(
+                status="error",
+                message=f"Không thể xử lý phản hồi Gemini sau retry: {exc}",
+                validation_retry_count=retry_count,
+            )
+
+        if selection.action != "tool_call" or not selection.tool_name:
+            return _selection_to_runtime_result(
+                selection, raw_response, validation_retry_count=retry_count
+            )
+
+        repaired_arguments = repair_tool_column_arguments(
+            dataframe, selection.tool_name, selection.arguments
+        )
+        validation = validate_tool_call(
+            dataframe, selection.tool_name, repaired_arguments
+        )
+
     if not validation.is_valid:
         return GeminiRuntimeResult(
             status="clarify",
-            message=f"Tool call chưa hợp lệ: {validation.message}",
+            message=f"Tool call chưa hợp lệ sau retry: {validation.message}",
             confidence=selection.confidence,
             raw_response=raw_response,
+            validation_retry_count=retry_count,
         )
 
     return GeminiRuntimeResult(
         status="tool_call",
-        message=selection.message or "Gemini selected a validated tool call.",
+        message=(
+            selection.message
+            or (
+                "Gemini selected a validated tool call after validation retry."
+                if retry_count
+                else "Gemini selected a validated tool call."
+            )
+        ),
         confidence=selection.confidence,
         tool_name=selection.tool_name,
         arguments=validation.normalized_arguments,
         raw_response=raw_response,
+        validation_retry_count=retry_count,
     )
 
 
@@ -202,6 +258,7 @@ def build_tool_selection_prompt(
     context = {
         "user_question": question,
         "dataset_schema": schema,
+        "column_data_dictionary": _column_data_dictionary(dataframe, safe_profile),
         "profile_summary": safe_profile,
         "available_tools": tools,
         "response_contract": {
@@ -224,6 +281,28 @@ def build_tool_selection_prompt(
     )
 
 
+def build_tool_selection_retry_prompt(
+    dataframe: pd.DataFrame,
+    question: str,
+    profile_summary: dict[str, Any] | None,
+    previous_selection: AgentToolSelection,
+    validation_message: str,
+) -> str:
+    retry_context = {
+        "previous_invalid_selection": previous_selection.model_dump(),
+        "validation_error": validation_message,
+        "repair_instruction": (
+            "Return one corrected JSON object. Fix only the tool_name/arguments. "
+            "If the request is ambiguous or cannot be mapped to a valid tool, return action='clarify'."
+        ),
+    }
+    return (
+        build_tool_selection_prompt(dataframe, question, profile_summary)
+        + "\n\nThe previous tool call failed validation. Use this feedback before answering:\n"
+        + json.dumps(retry_context, ensure_ascii=False)
+    )
+
+
 def parse_tool_selection_response(raw_response: str) -> AgentToolSelection:
     payload = _extract_json_object(raw_response)
     try:
@@ -239,6 +318,71 @@ def parse_tool_selection_response(raw_response: str) -> AgentToolSelection:
         raise ValueError(
             f"Invalid selection field '{field}': {first_error['msg']}"
         ) from exc
+
+
+def _selection_to_runtime_result(
+    selection: AgentToolSelection,
+    raw_response: str,
+    validation_retry_count: int = 0,
+) -> GeminiRuntimeResult:
+    if selection.action == "clarify":
+        return GeminiRuntimeResult(
+            status="clarify",
+            message=selection.message
+            or "Bạn có thể nói rõ hơn metric hoặc cột muốn phân tích không?",
+            confidence=selection.confidence,
+            raw_response=raw_response,
+            validation_retry_count=validation_retry_count,
+        )
+    if selection.action == "answer":
+        return GeminiRuntimeResult(
+            status="answer",
+            message=selection.message or "Câu hỏi này không cần gọi tool.",
+            confidence=selection.confidence,
+            raw_response=raw_response,
+            validation_retry_count=validation_retry_count,
+        )
+    return GeminiRuntimeResult(
+        status="error",
+        message="Gemini chọn tool_call nhưng không cung cấp tool_name.",
+        confidence=selection.confidence,
+        raw_response=raw_response,
+        validation_retry_count=validation_retry_count,
+    )
+
+
+def _column_data_dictionary(
+    dataframe: pd.DataFrame, profile_summary: dict[str, Any]
+) -> list[dict[str, Any]]:
+    metadata = profile_summary.get("column_metadata")
+    if isinstance(metadata, list) and metadata:
+        return [
+            {
+                "name": item.get("name"),
+                "dtype": item.get("dtype"),
+                "analysis_role": item.get("analysis_role") or item.get("inferred_kind"),
+                "semantic_aliases": item.get("semantic_aliases", []),
+                "sample_values": item.get("sample_values", []),
+                "missing_percent": item.get("missing_percent"),
+                "unique_count": item.get("unique_count"),
+            }
+            for item in metadata
+            if isinstance(item, dict)
+        ]
+    return [
+        {
+            "name": str(column),
+            "dtype": str(dataframe[column].dtype),
+            "analysis_role": "numeric_metric"
+            if pd.api.types.is_numeric_dtype(dataframe[column])
+            else "categorical_dimension",
+            "semantic_aliases": [],
+            "sample_values": [],
+            "missing_percent": None,
+            "unique_count": None,
+        }
+        for column in dataframe.columns
+    ]
 
 
 def _generate_with_retry(

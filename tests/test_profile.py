@@ -121,7 +121,12 @@ def test_profile_includes_column_metadata() -> None:
     assert metadata["score"]["inferred_kind"] == "numeric"
     assert metadata["segment"]["inferred_kind"] == "categorical"
     assert metadata["segment"]["unique_count"] == 2
+    assert metadata["segment"]["unique_ratio"] == 0.6667
+    assert metadata["segment"]["analysis_role"] == "categorical_dimension"
     assert metadata["segment"]["sample_values"] == ["A", "B", "A"]
+    assert metadata["score"]["analysis_role"] == "numeric_metric"
+    assert "điểm" in metadata["score"]["semantic_aliases"]
+    assert metadata["user_id"]["analysis_role"] == "identifier"
 
 
 def test_profile_returns_404_for_unknown_session() -> None:

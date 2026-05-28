@@ -16,3 +16,9 @@ def test_settings_returns_empty_origins_when_unset() -> None:
     settings = Settings(ALLOWED_ORIGINS="")
 
     assert settings.cors_allowed_origins() == []
+
+
+def test_settings_reads_planner_validation_retries() -> None:
+    settings = Settings(MAX_PLANNER_VALIDATION_RETRIES=2)
+
+    assert settings.max_planner_validation_retries == 2

@@ -275,6 +275,7 @@ def chat_query(
         session=session,
         question=request.question,
         provider=get_llm_provider(),
+        max_planner_validation_retries=settings.max_planner_validation_retries,
     )
     last_trace = response.tool_trace[-1] if response.tool_trace else None
     log_event(
@@ -310,6 +311,9 @@ def chat_query_stream(
                     question=request.question,
                     provider=get_llm_provider(),
                     event_callback=emit_trace,
+                    max_planner_validation_retries=(
+                        settings.max_planner_validation_retries
+                    ),
                 )
                 last_trace = response.tool_trace[-1] if response.tool_trace else None
                 log_event(

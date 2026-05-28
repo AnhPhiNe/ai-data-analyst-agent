@@ -1,8 +1,41 @@
 import math
+import re
 from typing import Any
 
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+
+
+SEMANTIC_ALIAS_MAP: dict[str, tuple[str, ...]] = {
+    "age": ("tuổi", "độ tuổi"),
+    "amount": ("số tiền", "giá trị"),
+    "attendance": ("chuyên cần", "tỷ lệ đi học"),
+    "category": ("danh mục", "nhóm", "loại"),
+    "customer": ("khách hàng",),
+    "date": ("ngày", "thời gian"),
+    "department": ("phòng ban", "bộ phận"),
+    "duration": ("thời lượng", "thời gian"),
+    "exam": ("điểm thi", "bài thi"),
+    "gender": ("giới tính",),
+    "grade": ("điểm", "điểm số", "xếp hạng"),
+    "hours": ("giờ", "số giờ"),
+    "income": ("thu nhập",),
+    "level": ("mức độ", "cấp độ"),
+    "mark": ("điểm", "điểm số"),
+    "monthly": ("hàng tháng", "theo tháng"),
+    "parent": ("phụ huynh", "cha mẹ"),
+    "parental": ("phụ huynh", "cha mẹ"),
+    "price": ("giá", "giá bán"),
+    "product": ("sản phẩm",),
+    "quality": ("chất lượng",),
+    "quantity": ("số lượng",),
+    "region": ("vùng", "khu vực"),
+    "revenue": ("doanh thu",),
+    "salary": ("lương", "thu nhập"),
+    "score": ("điểm", "điểm số", "kết quả"),
+    "teacher": ("giáo viên", "giảng viên"),
+    "type": ("loại", "kiểu"),
+}
 
 
 def _json_safe(value: Any) -> Any:
@@ -83,14 +116,20 @@ def _column_metadata(
         non_null = series.dropna()
         profile = profile_by_name[column_name]
         unique_count = int(non_null.nunique())
+        non_null_count = int(profile["non_null_count"])
+        unique_ratio = unique_count / non_null_count if non_null_count else 0.0
+        inferred_kind = _infer_column_kind(column_name, series, unique_count)
         metadata.append(
             {
                 "name": column_name,
                 "dtype": str(series.dtype),
                 "missing_percent": float(profile["missing_percent"]),
                 "unique_count": unique_count,
+                "unique_ratio": round(unique_ratio, 4),
                 "sample_values": _sample_values(non_null),
-                "inferred_kind": _infer_column_kind(column_name, series, unique_count),
+                "inferred_kind": inferred_kind,
+                "analysis_role": _analysis_role(inferred_kind, series, unique_ratio),
+                "semantic_aliases": _semantic_aliases(column_name),
             }
         )
 
@@ -120,6 +159,34 @@ def _infer_column_kind(column_name: str, series: pd.Series, unique_count: int) -
     if non_null_count >= 10 and unique_ratio >= 0.95:
         return "id_like"
     return "categorical"
+
+
+def _analysis_role(inferred_kind: str, series: pd.Series, unique_ratio: float) -> str:
+    if inferred_kind == "id_like":
+        return "identifier"
+    if inferred_kind == "boolean":
+        return "boolean_dimension"
+    if inferred_kind == "datetime_like":
+        return "time_dimension"
+    if inferred_kind == "numeric":
+        return "numeric_metric"
+    if unique_ratio >= 0.8 and int(series.notna().sum()) >= 20:
+        return "high_cardinality_dimension"
+    return "categorical_dimension"
+
+
+def _semantic_aliases(column_name: str) -> list[str]:
+    tokens = _column_tokens(column_name)
+    aliases: list[str] = []
+    for token in tokens:
+        aliases.extend(SEMANTIC_ALIAS_MAP.get(token, ()))
+    return list(dict.fromkeys(aliases))[:6]
+
+
+def _column_tokens(column_name: str) -> list[str]:
+    normalized = column_name.lower().replace("-", "_").replace(" ", "_")
+    tokens = re.split(r"[_\W]+", normalized)
+    return [token for token in tokens if token]
 
 
 def _looks_datetime_like(series: pd.Series) -> bool:

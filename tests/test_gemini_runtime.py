@@ -49,6 +49,7 @@ def test_build_tool_selection_prompt_contains_schema_and_tools() -> None:
 
     assert "salary" in prompt
     assert "department" in prompt
+    assert "column_data_dictionary" in prompt
     assert "aggregate_metric" in prompt
     assert "Không sinh hoặc yêu cầu chạy code Python" in prompt
 
@@ -113,6 +114,36 @@ def test_choose_tool_with_gemini_falls_back_when_structured_schema_is_rejected()
     assert result.arguments == {"column": "department", "top_n": 2}
     assert provider.structured_calls == 1
     assert provider.generate_calls == 1
+
+
+def test_choose_tool_with_gemini_retries_invalid_tool_call_with_feedback() -> None:
+    provider = FakeProvider(
+        responses=[
+            '{"action":"tool_call","confidence":0.88,"tool_name":"aggregate_metric",'
+            '"arguments":{"metric_column":"unknown","group_by":"department"}}',
+            '{"action":"tool_call","confidence":0.93,"tool_name":"aggregate_metric",'
+            '"arguments":{"metric_column":"salary","group_by":"department","operation":"mean"}}',
+        ]
+    )
+
+    result = choose_tool_with_gemini(
+        _sample_dataframe(),
+        "Tính trung bình salary theo department",
+        provider,
+        max_validation_retries=1,
+    )
+
+    assert result.status == "tool_call"
+    assert result.tool_name == "aggregate_metric"
+    assert result.arguments == {
+        "metric_column": "salary",
+        "group_by": "department",
+        "operation": "mean",
+        "limit": 20,
+    }
+    assert result.validation_retry_count == 1
+    assert len(provider.prompts) == 2
+    assert "validation_error" in provider.prompts[1]
 
 
 def test_choose_tool_with_gemini_returns_clarify_for_invalid_tool_call() -> None:

@@ -39,6 +39,7 @@ def run_agent_turn(
     question: str,
     provider: LLMProvider | None = None,
     event_callback: TraceCallback | None = None,
+    max_planner_validation_retries: int = 1,
 ) -> ChatResponse:
     traces: list[ToolTraceItem] = []
 
@@ -160,7 +161,14 @@ def run_agent_turn(
         question=question,
         provider=provider,
         profile_summary=_safe_profile_summary(session),
+        max_validation_retries=max_planner_validation_retries,
     )
+    gemini_message = gemini_result.message
+    if gemini_result.validation_retry_count:
+        gemini_message = (
+            f"{gemini_message} | planner_validation_retries="
+            f"{gemini_result.validation_retry_count}"
+        )
     _record_trace(
         traces,
         ToolTraceItem(
@@ -168,7 +176,7 @@ def run_agent_turn(
             tool_name=gemini_result.tool_name,
             arguments=gemini_result.arguments,
             status=gemini_result.status,
-            message=gemini_result.message,
+            message=gemini_message,
             confidence=gemini_result.confidence,
         ),
         event_callback,

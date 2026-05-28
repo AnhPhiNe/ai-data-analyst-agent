@@ -113,6 +113,29 @@ def test_run_agent_turn_gemini_tool_execution_success() -> None:
     assert response.table is not None
 
 
+def test_run_agent_turn_traces_gemini_validation_retry() -> None:
+    session = _create_session()
+    provider = FakeProvider(
+        responses=[
+            '{"action":"tool_call","confidence":0.88,"tool_name":"aggregate_metric",'
+            '"arguments":{"metric_column":"foobar","group_by":"department"}}',
+            '{"action":"tool_call","confidence":0.94,"tool_name":"aggregate_metric",'
+            '"arguments":{"metric_column":"salary","group_by":"department","operation":"mean"}}',
+        ]
+    )
+
+    response = run_agent_turn(
+        session, "Thực hiện phân tích nâng cao", provider=provider
+    )
+
+    assert response.response_type == "table"
+    gemini_trace = next(
+        trace for trace in response.tool_trace if trace.source == "gemini"
+    )
+    assert "planner_validation_retries=1" in gemini_trace.message
+    assert len(provider.prompts) == 2
+
+
 def test_run_agent_turn_with_trace_callback() -> None:
     session = _create_session()
     called_traces = []
