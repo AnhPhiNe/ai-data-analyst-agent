@@ -3,7 +3,11 @@ from typing import Any
 
 import pandas as pd
 
-from backend.agent.clarification_memory import try_resolve_pending_clarification
+from backend.agent.clarification_memory import (
+    try_resolve_pending_clarification,
+    set_pending_from_question,
+    set_pending_from_tool_call,
+)
 from backend.agent.column_argument_repair import repair_tool_column_arguments
 from backend.agent.column_resolver import normalize_text, resolve_column
 from backend.agent.correlation_helpers import (
@@ -136,6 +140,12 @@ def run_agent_turn(
         )
         if multi_step_result.status == "clarify":
             session_store.clear_pending_clarification(session.session_id)
+            set_pending_from_question(
+                session=session,
+                question=question,
+                message=multi_step_result.message or "Bạn hãy nói rõ hơn yêu cầu phân tích.",
+                initial_arguments=None,
+            )
             response = clarification_response(
                 session.session_id,
                 multi_step_result.message or "Bạn hãy nói rõ hơn yêu cầu phân tích.",
@@ -192,6 +202,12 @@ def run_agent_turn(
 
     if router_decision.route_type == "clarify":
         session_store.clear_pending_clarification(session.session_id)
+        set_pending_from_question(
+            session=session,
+            question=question,
+            message=router_decision.message or "Bạn có thể nói rõ hơn không?",
+            initial_arguments=router_decision.arguments,
+        )
         response = clarification_response(
             session.session_id,
             router_decision.message or "Bạn có thể nói rõ hơn không?",
@@ -261,6 +277,12 @@ def run_agent_turn(
 
     if gemini_result.status == "clarify":
         session_store.clear_pending_clarification(session.session_id)
+        set_pending_from_question(
+            session=session,
+            question=question,
+            message=gemini_result.message,
+            initial_arguments=gemini_result.arguments or {},
+        )
         response = clarification_response(
             session.session_id,
             gemini_result.message,
@@ -353,6 +375,15 @@ def execute_multi_step_plan(
         )
         if not validation.is_valid:
             session_store.clear_pending_clarification(session.session_id)
+            set_pending_from_tool_call(
+                session=session,
+                question=question,
+                tool_name=step.tool_name,
+                arguments=arguments,
+                message=validation_clarification_message(
+                    step.tool_name, validation.message
+                ),
+            )
             if not tool_results:
                 return clarification_response(
                     session.session_id,
@@ -419,6 +450,13 @@ def execute_validated_tool(
     )
     target_issue = correlation_target_issue(session, question, tool_name)
     if target_issue is not None:
+        set_pending_from_tool_call(
+            session=session,
+            question=question,
+            tool_name=tool_name,
+            arguments=arguments,
+            message=target_issue,
+        )
         _record_trace(
             traces,
             ToolTraceItem(
@@ -486,6 +524,13 @@ def execute_validated_tool(
             )
     if not validation.is_valid:
         session_store.clear_pending_clarification(session.session_id)
+        set_pending_from_tool_call(
+            session=session,
+            question=question,
+            tool_name=tool_name,
+            arguments=arguments,
+            message=validation_clarification_message(tool_name, validation.message),
+        )
         response = clarification_response(
             session.session_id,
             validation_clarification_message(tool_name, validation.message),
