@@ -84,7 +84,7 @@ BLOCKED_PATTERNS: list[tuple[GuardrailCategory, tuple[str, ...], str]] = [
             "gọi api ngoài",
             "external api",
         ),
-        "MVP này không truy cập internet hoặc API bên ngoài; mình chỉ phân tích dataset đã upload.",
+        "Hệ thống này không truy cập internet hoặc API bên ngoài; mình chỉ phân tích dataset đã upload.",
     ),
     (
         GuardrailCategory.DESTRUCTIVE_ACTION,

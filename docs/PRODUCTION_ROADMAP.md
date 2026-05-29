@@ -1,6 +1,6 @@
 # Production Roadmap
 
-This roadmap documents the architectural steps taken to transition the project from its current stable MVP stage to a production-grade enterprise platform.
+This roadmap documents the architectural steps taken to transition the project from its current stable stage to a production-grade enterprise platform.
 
 ## Implemented Now
 

@@ -1,6 +1,6 @@
 # Router Accuracy Report
 
-This report documents a lightweight deterministic routing eval for the stable MVP release.
+This report documents a lightweight deterministic routing eval for the stable release.
 
 ## Scope
 

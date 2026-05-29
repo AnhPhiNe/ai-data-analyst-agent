@@ -15,7 +15,7 @@ def _sample_dataframe() -> pd.DataFrame:
     )
 
 
-def test_registry_contains_only_expected_mvp_tools() -> None:
+def test_registry_contains_only_expected_core_tools() -> None:
     assert set(TOOL_REGISTRY) == {
         "list_columns",
         "profile_dataset",
