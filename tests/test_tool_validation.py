@@ -134,3 +134,28 @@ def test_validate_tool_call_accepts_chart_spec() -> None:
         "x": "department",
         "y": "salary",
     }
+
+
+def test_validate_tool_call_accepts_read_only_sql() -> None:
+    result = validate_tool_call(
+        _sample_dataframe(),
+        "query_table_sql",
+        {"sql": "SELECT department, salary FROM dataset", "limit": 5},
+    )
+
+    assert result.is_valid is True
+    assert result.normalized_arguments == {
+        "sql": "SELECT department, salary FROM dataset",
+        "limit": 5,
+    }
+
+
+def test_validate_tool_call_rejects_unsafe_sql() -> None:
+    result = validate_tool_call(
+        _sample_dataframe(),
+        "query_table_sql",
+        {"sql": "DELETE FROM dataset"},
+    )
+
+    assert result.is_valid is False
+    assert "not allowed" in result.message

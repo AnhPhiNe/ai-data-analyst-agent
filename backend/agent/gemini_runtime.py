@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import re
 import time
 from typing import Any, Literal, Protocol
 
@@ -190,10 +191,10 @@ def choose_tool_with_gemini(
         )
         selection = parse_tool_selection_response(raw_response)
         retry_count = 0
-    except TransientLLMError:
+    except TransientLLMError as exc:
         return GeminiRuntimeResult(
             status="error",
-            message="LLM provider đang tạm thời quá tải. Vui lòng thử lại sau.",
+            message=format_llm_provider_error(exc),
         )
     except (LLMRuntimeError, ValueError) as exc:
         return GeminiRuntimeResult(
@@ -248,10 +249,10 @@ def choose_tool_with_gemini(
                 max_retries=max_retries,
             )
             selection = parse_tool_selection_response(raw_response)
-        except TransientLLMError:
+        except TransientLLMError as exc:
             return GeminiRuntimeResult(
                 status="error",
-                message="LLM provider đang tạm thời quá tải. Vui lòng thử lại sau.",
+                message=format_llm_provider_error(exc),
                 validation_retry_count=retry_count,
             )
         except (LLMRuntimeError, ValueError) as exc:
@@ -338,6 +339,8 @@ def build_tool_selection_prompt(
         "Bạn là runtime planner cho AI Data Analyst Agent.\n"
         "Chỉ chọn tool trong available_tools. Không tự bịa số liệu. Không sinh hoặc yêu cầu chạy code Python.\n"
         "Không truy cập internet, file hệ thống, API key hoặc biến môi trường.\n"
+        "Nếu dùng query_table_sql, chỉ sinh SQL read-only SELECT/WITH SELECT trên table tên dataset; "
+        "không dùng SQL khi specialist tool như data_quality_report, outlier_detection, correlation_analysis hoặc generate_chart_spec phù hợp hơn.\n"
         "Nếu thiếu metric/group/cột hoặc confidence thấp, trả action='clarify'.\n"
         "Nếu cần dữ liệu thật để trả lời, trả action='tool_call'.\n"
         "Chỉ trả về một JSON object hợp lệ, không markdown.\n\n"
@@ -516,6 +519,69 @@ def _is_retryable_exception(exc: Exception) -> bool:
         token in text
         for token in ("429", "503", "timeout", "temporarily", "unavailable")
     )
+
+
+def format_llm_provider_error(exc: Exception) -> str:
+    detail = _sanitize_provider_error(str(exc))
+    category = _classify_provider_error(detail)
+    return (
+        f"LLM provider tạm thời không sẵn sàng ({category}): {detail}. "
+        "Vui lòng thử lại sau hoặc đổi provider/model nếu lỗi lặp lại."
+    )
+
+
+def _classify_provider_error(detail: str) -> str:
+    lowered = detail.lower()
+    if "quota" in lowered:
+        return "quota_exceeded"
+    if "rate" in lowered or "429" in lowered or "tpm" in lowered:
+        return "rate_limit"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout"
+    if "503" in lowered or "unavailable" in lowered or "overloaded" in lowered:
+        return "provider_unavailable"
+    return "transient_error"
+
+
+def _sanitize_provider_error(message: str) -> str:
+    parsed_message = _extract_provider_error_message(message)
+    redacted = re.sub(r"AIza[0-9A-Za-z_\-]{20,}", "[REDACTED_API_KEY]", parsed_message)
+    redacted = re.sub(
+        r"\b(?:sk|gsk)_[0-9A-Za-z_\-]{16,}\b",
+        "[REDACTED_API_KEY]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"Bearer\s+[0-9A-Za-z_\-\.]+",
+        "Bearer [REDACTED_API_KEY]",
+        redacted,
+        flags=re.I,
+    )
+    redacted = " ".join(redacted.split())
+    if len(redacted) > 500:
+        return redacted[:497].rstrip() + "..."
+    return redacted or "Provider returned a transient error."
+
+
+def _extract_provider_error_message(message: str) -> str:
+    text = message.strip()
+    if not text.startswith("{"):
+        return text
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return text
+
+    parts = []
+    for key in ("code", "type", "status", "message"):
+        value = error.get(key)
+        if value is not None:
+            parts.append(f"{key}={value}")
+    return "; ".join(parts) if parts else text
 
 
 def _is_structured_schema_error(exc: Exception) -> bool:

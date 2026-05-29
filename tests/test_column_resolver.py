@@ -51,3 +51,40 @@ def test_resolve_column() -> None:
     assert (
         resolve_column(df, "doanh thu hang thang", expected_type="categorical") is None
     )
+
+
+def test_resolve_column_supports_bidirectional_vietnamese_english_aliases() -> None:
+    english_df = pd.DataFrame(
+        {
+            "department": ["Engineering", "Sales"],
+            "salary": [1200.0, 900.0],
+            "Monthly_Revenue": [1000.0, 1500.0],
+            "Exam_Score": [8.5, 7.0],
+        }
+    )
+    vietnamese_df = pd.DataFrame(
+        {
+            "phong_ban": ["Engineering", "Sales"],
+            "luong": [1200.0, 900.0],
+            "doanh_thu": [1000.0, 1500.0],
+            "diem_thi": [8.5, 7.0],
+        }
+    )
+
+    assert resolve_column(english_df, "luong", expected_type="numeric") == "salary"
+    assert (
+        resolve_column(english_df, "doanh thu", expected_type="numeric")
+        == "Monthly_Revenue"
+    )
+    assert (
+        resolve_column(english_df, "diem thi", expected_type="numeric") == "Exam_Score"
+    )
+    assert resolve_column(vietnamese_df, "salary", expected_type="numeric") == "luong"
+    assert (
+        resolve_column(vietnamese_df, "revenue", expected_type="numeric") == "doanh_thu"
+    )
+    assert resolve_column(vietnamese_df, "score", expected_type="numeric") == "diem_thi"
+    assert (
+        resolve_column(vietnamese_df, "department", expected_type="categorical")
+        == "phong_ban"
+    )

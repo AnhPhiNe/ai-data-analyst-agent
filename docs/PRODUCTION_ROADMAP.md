@@ -12,6 +12,8 @@ This project is intentionally scoped as a portfolio MVP. The items below are the
 - Upload and chat endpoints have a basic per-process rate limiter.
 - Router behavior has a small JSONL eval set.
 - Golden answer behavior has a small multi-dataset JSONL eval set.
+- The chat orchestrator supports controlled multi-step plans for common tabular analysis workflows.
+- DuckDB SQL fallback is available for read-only single-table SELECT queries with validation and bounded limits.
 
 ## Next Production Steps
 

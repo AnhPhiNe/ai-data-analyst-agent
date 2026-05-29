@@ -99,6 +99,18 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
             )
         return f"Đã tạo biểu đồ dạng {chart_type} cho các cột đã chọn."
 
+    if tool_result.tool_name == "query_table_sql":
+        row_count = len(tool_result.table or [])
+        sql = ""
+        if isinstance(tool_result.data, dict):
+            sql_value = tool_result.data.get("sql")
+            if isinstance(sql_value, str) and sql_value.strip():
+                sql = f"\n\n```sql\n{sql_value.strip()}\n```"
+        return (
+            "Đã chạy truy vấn SQL read-only đã được validate và trả về "
+            f"{_format_number(row_count)} dòng kết quả.{sql}"
+        )
+
     if tool_result.table:
         return f"Đã tính xong bảng kết quả bằng tool '{tool_result.tool_name}'."
 
@@ -111,6 +123,66 @@ def response_type(tool_result: ToolResult) -> str:
     if tool_result.table is not None:
         return "table"
     return "answer"
+
+
+def build_multi_step_answer(
+    question: str,
+    tool_results: list[ToolResult],
+    warnings: list[str] | None = None,
+) -> str:
+    if not tool_results:
+        return "Mình chưa chạy được bước phân tích nào cho câu hỏi này."
+
+    normalized = _normalize_answer_text(question)
+    if (
+        len(tool_results) == 1
+        and tool_results[0].tool_name == "data_quality_report"
+        and isinstance(tool_results[0].data, dict)
+        and any(
+            token in normalized for token in ("nen dung", "de phan tich", "giong id")
+        )
+    ):
+        answer = _data_quality_recommendation_answer(tool_results[0].data)
+    else:
+        answer_parts = []
+        for result in tool_results:
+            part = build_answer(question, result)
+            if part and part not in answer_parts:
+                answer_parts.append(part)
+        answer = " ".join(answer_parts)
+
+    if warnings:
+        answer = answer + " Lưu ý: " + " ".join(warnings)
+    return answer
+
+
+def _data_quality_recommendation_answer(data: dict[str, Any]) -> str:
+    possible_id_columns = [
+        str(column) for column in data.get("possible_id_columns") or []
+    ]
+    constant_columns = [str(column) for column in data.get("constant_columns") or []]
+    high_cardinality_columns = [
+        str(column) for column in data.get("high_cardinality_columns") or []
+    ]
+    candidates = [
+        str(column) for column in data.get("analysis_candidate_columns") or []
+    ]
+
+    parts = []
+    if possible_id_columns:
+        parts.append("cột giống ID: " + ", ".join(possible_id_columns[:5]))
+    if constant_columns:
+        parts.append("cột hằng số nên tránh: " + ", ".join(constant_columns[:5]))
+    if high_cardinality_columns:
+        parts.append(
+            "cột high-cardinality cần cẩn thận: "
+            + ", ".join(high_cardinality_columns[:5])
+        )
+    if candidates:
+        parts.append("cột nên ưu tiên phân tích: " + ", ".join(candidates[:8]))
+    if not parts:
+        return "Không phát hiện cột giống ID hoặc cột cần tránh rõ ràng; có thể phân tích các cột còn lại theo mục tiêu câu hỏi."
+    return "Tóm tắt lựa chọn cột: " + "; ".join(parts) + "."
 
 
 def clarification_response(

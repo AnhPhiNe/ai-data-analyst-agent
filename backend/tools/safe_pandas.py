@@ -7,6 +7,7 @@ from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.profiling import profile_dataset
+from backend.tools.sql_safety import validate_read_only_sql
 from backend.visualization.chart_specs import (
     ChartSpecValidationError,
     validate_chart_spec,
@@ -574,6 +575,38 @@ def generate_chart_spec_tool(
     )
 
 
+def query_table_sql_tool(
+    dataframe: pd.DataFrame, arguments: dict[str, Any]
+) -> ToolResult:
+    try:
+        validated_sql = validate_read_only_sql(
+            arguments.get("sql"), arguments.get("limit", 100)
+        )
+    except ValueError as exc:
+        raise ToolValidationError(str(exc)) from exc
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise ToolValidationError(
+            "DuckDB is not installed. Install the 'duckdb' package to use SQL fallback."
+        ) from exc
+
+    try:
+        with duckdb.connect(database=":memory:") as connection:
+            connection.register("dataset", dataframe)
+            result = connection.execute(validated_sql.executable_sql).fetchdf()
+    except Exception as exc:
+        raise ToolValidationError(f"SQL execution failed: {exc}") from exc
+
+    return ToolResult(
+        tool_name="query_table_sql",
+        status="success",
+        message=f"Executed read-only SQL query and returned {len(result)} row(s).",
+        data={"sql": validated_sql.sql, "limit": validated_sql.limit},
+        table=_records(result),
+    )
+
+
 def _validated_chart_spec(
     dataframe: pd.DataFrame, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -820,5 +853,10 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         "generate_chart_spec",
         "Generate a safe chart specification without executable code.",
         generate_chart_spec_tool,
+    ),
+    "query_table_sql": ToolDefinition(
+        "query_table_sql",
+        "Execute a read-only DuckDB SELECT query against the current dataset table.",
+        query_table_sql_tool,
     ),
 }

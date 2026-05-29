@@ -12,8 +12,14 @@ from backend.agent.correlation_helpers import (
 )
 from backend.agent.gemini_runtime import LLMProvider, choose_tool_with_gemini
 from backend.agent.guardrails import check_guardrails
+from backend.agent.multi_step_planner import (
+    MultiStepPlan,
+    plan_multi_step_question,
+    validate_multi_step_plan,
+)
 from backend.agent.response_composer import (
     build_answer,
+    build_multi_step_answer,
     clarification_response,
     response_type,
     validation_clarification_message,
@@ -23,7 +29,7 @@ from backend.agent.tool_validation import validate_tool_call
 from backend.schemas import ChatResponse, ToolTraceItem
 from backend.services.profiling import profile_dataset
 from backend.services.session_store import DatasetSession, session_store
-from backend.tools.safe_pandas import execute_tool
+from backend.tools.safe_pandas import ToolResult, execute_tool
 
 TraceCallback = Callable[[ToolTraceItem], None]
 MAX_GEMINI_VALIDATION_REPAIR_ATTEMPTS = 1
@@ -91,6 +97,84 @@ def run_agent_turn(
                 "clarification_followup",
             )
             return pending_response
+
+    multi_step_result = plan_multi_step_question(
+        dataframe=session.dataframe,
+        question=question,
+        provider=provider,
+        profile_summary=_safe_profile_summary(session),
+    )
+    if multi_step_result.status != "skip":
+        _record_trace(
+            traces,
+            ToolTraceItem(
+                source="multi_step_planner",
+                status=multi_step_result.status,
+                message=multi_step_result.message
+                or (
+                    multi_step_result.plan.message
+                    if multi_step_result.plan is not None
+                    else "Multi-step planner evaluated the question."
+                ),
+                confidence=multi_step_result.confidence,
+                arguments=(
+                    {
+                        "steps": [
+                            {
+                                "tool_name": step.tool_name,
+                                "arguments": step.arguments,
+                                "purpose": step.purpose,
+                            }
+                            for step in multi_step_result.plan.steps
+                        ]
+                    }
+                    if multi_step_result.plan is not None
+                    else None
+                ),
+            ),
+            event_callback,
+        )
+        if multi_step_result.status == "clarify":
+            session_store.clear_pending_clarification(session.session_id)
+            response = clarification_response(
+                session.session_id,
+                multi_step_result.message or "Bạn hãy nói rõ hơn yêu cầu phân tích.",
+                traces,
+            )
+            _remember(
+                session.session_id, question, response.answer, "multi_step_clarify"
+            )
+            return response
+        if multi_step_result.status == "answer":
+            response = ChatResponse(
+                session_id=session.session_id,
+                answer=multi_step_result.message or "Câu hỏi này không cần chạy tool.",
+                response_type="answer",
+                tool_trace=traces,
+            )
+            _remember(
+                session.session_id, question, response.answer, "multi_step_answer"
+            )
+            return response
+        if multi_step_result.status == "error":
+            response = ChatResponse(
+                session_id=session.session_id,
+                answer=multi_step_result.message or "Không thể lập multi-step plan.",
+                response_type="error",
+                tool_trace=traces,
+            )
+            _remember(session.session_id, question, response.answer, "multi_step_error")
+            return response
+        if multi_step_result.plan is not None:
+            response = execute_multi_step_plan(
+                session=session,
+                question=question,
+                plan=multi_step_result.plan,
+                traces=traces,
+                event_callback=event_callback,
+            )
+            _remember(session.session_id, question, response.answer, "multi_step_tool")
+            return response
 
     router_decision = route_question(session.dataframe, question)
     _record_trace(
@@ -218,6 +302,109 @@ def run_agent_turn(
     return response
 
 
+def execute_multi_step_plan(
+    session: DatasetSession,
+    question: str,
+    plan: MultiStepPlan,
+    traces: list[ToolTraceItem],
+    event_callback: TraceCallback | None = None,
+) -> ChatResponse:
+    is_valid_plan, plan_message = validate_multi_step_plan(session.dataframe, plan)
+    _record_trace(
+        traces,
+        ToolTraceItem(
+            source="multi_step_validation",
+            status="success" if is_valid_plan else "error",
+            message=plan_message,
+            confidence=plan.confidence,
+        ),
+        event_callback,
+    )
+    if not is_valid_plan:
+        session_store.clear_pending_clarification(session.session_id)
+        return clarification_response(
+            session.session_id,
+            f"Multi-step plan chưa hợp lệ: {plan_message}",
+            traces,
+        )
+
+    tool_results: list[ToolResult] = []
+    warnings: list[str] = []
+    for index, step in enumerate(plan.steps, start=1):
+        arguments = _repair_tool_arguments(
+            session=session,
+            question=question,
+            tool_name=step.tool_name,
+            arguments=step.arguments,
+            traces=traces,
+            event_callback=event_callback,
+        )
+        validation = validate_tool_call(session.dataframe, step.tool_name, arguments)
+        _record_trace(
+            traces,
+            ToolTraceItem(
+                source="multi_step_validation",
+                tool_name=step.tool_name,
+                arguments=arguments,
+                status="success" if validation.is_valid else "error",
+                message=f"Step {index}: {validation.message}",
+            ),
+            event_callback,
+        )
+        if not validation.is_valid:
+            session_store.clear_pending_clarification(session.session_id)
+            if not tool_results:
+                return clarification_response(
+                    session.session_id,
+                    validation_clarification_message(
+                        step.tool_name, validation.message
+                    ),
+                    traces,
+                )
+            warnings.append(f"Bỏ qua bước {index} vì tham số chưa hợp lệ.")
+            break
+
+        tool_result = execute_tool(
+            session.dataframe, step.tool_name, validation.normalized_arguments
+        )
+        _record_trace(
+            traces,
+            ToolTraceItem(
+                source="multi_step_executor",
+                tool_name=step.tool_name,
+                arguments=validation.normalized_arguments,
+                status=tool_result.status,
+                message=f"Step {index}: {tool_result.message}",
+            ),
+            event_callback,
+        )
+        if tool_result.status == "error":
+            session_store.clear_pending_clarification(session.session_id)
+            if not tool_results:
+                return ChatResponse(
+                    session_id=session.session_id,
+                    answer=f"Could not complete this multi-step analysis: {tool_result.message}",
+                    response_type="error",
+                    tool_trace=traces,
+                )
+            warnings.append(f"Bỏ qua bước {index}: {tool_result.message}")
+            break
+        tool_results.append(tool_result)
+
+    answer = build_multi_step_answer(question, tool_results, warnings)
+    table = _select_multi_step_table(tool_results)
+    chart_spec = _select_multi_step_chart(tool_results)
+    session_store.clear_pending_clarification(session.session_id)
+    return ChatResponse(
+        session_id=session.session_id,
+        answer=answer,
+        response_type="chart" if chart_spec else "table" if table else "answer",
+        table=table,
+        chart_spec=chart_spec,
+        tool_trace=traces,
+    )
+
+
 def execute_validated_tool(
     session: DatasetSession,
     question: str,
@@ -341,6 +528,36 @@ def execute_validated_tool(
     )
 
 
+def _select_multi_step_table(
+    tool_results: list[ToolResult],
+) -> list[dict[str, Any]] | None:
+    priority = (
+        "query_table_sql",
+        "compare_groups",
+        "correlation_analysis",
+        "data_quality_report",
+        "outlier_detection",
+        "detect_missing_values",
+        "describe_numeric",
+        "value_counts",
+    )
+    for tool_name in priority:
+        for result in tool_results:
+            if result.tool_name == tool_name and result.table is not None:
+                return result.table
+    for result in tool_results:
+        if result.table is not None:
+            return result.table
+    return None
+
+
+def _select_multi_step_chart(tool_results: list[ToolResult]) -> dict[str, Any] | None:
+    for result in reversed(tool_results):
+        if result.chart_spec is not None:
+            return result.chart_spec
+    return None
+
+
 def _repair_after_validation_failure(
     dataframe: pd.DataFrame,
     question: str,
@@ -414,6 +631,8 @@ def _normalize_operator_argument(arguments: dict[str, Any]) -> None:
         "lte": "lte",
         "less or equal": "lte",
         "eq": "eq",
+        "equals": "eq",
+        "equal": "eq",
         "bang": "eq",
         "ne": "ne",
         "khac": "ne",

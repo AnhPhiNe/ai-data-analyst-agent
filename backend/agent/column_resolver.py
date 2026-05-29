@@ -25,6 +25,7 @@ HIGH_SIGNAL_TOKENS = {
     "mark",
     "price",
     "revenue",
+    "salary",
     "score",
     "sleep",
 }
@@ -59,6 +60,7 @@ TOKEN_TRANSLATIONS: dict[str, tuple[str, ...]] = {
     "quantity": ("so luong",),
     "region": ("vung", "khu vuc"),
     "revenue": ("doanh thu",),
+    "salary": ("luong", "tien luong", "muc luong"),
     "score": ("diem", "diem so", "ket qua"),
     "sleep": ("ngu", "giac ngu"),
     "school": ("truong", "nha truong"),
@@ -153,6 +155,12 @@ def _score_column(column: str, normalized_text: str) -> float:
     compact_column = normalized_column.replace(" ", "")
     best_score = difflib.SequenceMatcher(None, compact_text, compact_column).ratio()
 
+    reverse_terms = _reverse_translation_terms(normalized_column)
+    if reverse_terms and any(
+        _term_in_text(term, normalized_text) for term in reverse_terms
+    ):
+        best_score = max(best_score, 0.92)
+
     column_terms = _column_terms(normalized_column)
     if column_terms:
         matched_terms = sum(
@@ -175,9 +183,10 @@ def _score_column(column: str, normalized_text: str) -> float:
 
 def _column_terms(normalized_column: str) -> set[str]:
     terms: set[str] = set()
+    terms.update(_reverse_translation_terms(normalized_column))
     for token in normalized_column.split():
         terms.add(token)
-        terms.update(TOKEN_TRANSLATIONS.get(token, ()))
+        terms.update(_translation_terms_for_token(token))
     return {term for term in terms if term}
 
 
@@ -187,18 +196,44 @@ def _column_token_score(normalized_column: str, normalized_text: str) -> float:
         return 0.0
 
     matched_tokens = []
+    high_signal_matched = False
     for token in tokens:
-        terms = {token, *TOKEN_TRANSLATIONS.get(token, ())}
+        terms = {token, *_translation_terms_for_token(token)}
         if any(_term_in_text(term, normalized_text) for term in terms):
             matched_tokens.append(token)
+            if any(
+                term in HIGH_SIGNAL_TOKENS and _term_in_text(term, normalized_text)
+                for term in terms
+            ):
+                high_signal_matched = True
 
     if not matched_tokens:
         return 0.0
 
     score = len(matched_tokens) / len(tokens)
-    if len(matched_tokens) == 1 and matched_tokens[0] in HIGH_SIGNAL_TOKENS:
+    if len(matched_tokens) == 1 and (
+        matched_tokens[0] in HIGH_SIGNAL_TOKENS or high_signal_matched
+    ):
         score = max(score, 0.82)
     return score
+
+
+def _translation_terms_for_token(token: str) -> set[str]:
+    terms = set(TOKEN_TRANSLATIONS.get(token, ()))
+    terms.update(_reverse_translation_terms(token))
+    return terms
+
+
+def _reverse_translation_terms(normalized_term: str) -> set[str]:
+    matches: set[str] = set()
+    compact_term = normalized_term.replace(" ", "")
+    for english_token, aliases in TOKEN_TRANSLATIONS.items():
+        for alias in aliases:
+            normalized_alias = normalize_text(alias)
+            compact_alias = normalized_alias.replace(" ", "")
+            if normalized_term == normalized_alias or compact_term == compact_alias:
+                matches.add(english_token)
+    return matches
 
 
 def _term_in_text(term: str, normalized_text: str) -> bool:

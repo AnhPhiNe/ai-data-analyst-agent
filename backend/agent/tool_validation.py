@@ -5,6 +5,7 @@ import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
 from backend.tools.safe_pandas import DANGEROUS_ARG_KEYS, TOOL_REGISTRY
+from backend.tools.sql_safety import validate_read_only_sql
 from backend.visualization.chart_specs import (
     ChartSpecValidationError,
     validate_chart_spec,
@@ -174,6 +175,12 @@ def _validate_tool_specific_arguments(
             return validate_chart_spec(arguments, dataframe)
         except ChartSpecValidationError as exc:
             raise ValueError(str(exc)) from exc
+
+    if tool_name == "query_table_sql":
+        validated_sql = validate_read_only_sql(
+            arguments.get("sql"), arguments.get("limit", 100)
+        )
+        return {"sql": validated_sql.sql, "limit": validated_sql.limit}
 
     raise ValueError(f"Tool '{tool_name}' is not supported by validation.")
 

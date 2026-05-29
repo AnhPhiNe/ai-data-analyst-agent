@@ -484,6 +484,14 @@ def _trace_title(trace: dict[str, object]) -> str:
         return "Repaired tool arguments"
     if source == "agent_validation":
         return "Checked agent-specific constraints"
+    if source == "multi_step_planner":
+        return "Multi-step planner"
+    if source == "multi_step_validation":
+        return "Validated multi-step plan"
+    if source == "multi_step_executor":
+        return (
+            f"Executed multi-step `{tool_name}`" if tool_name else "Executed multi-step"
+        )
     if source == "memory":
         return "Used clarification memory"
     return source.replace("_", " ").title()

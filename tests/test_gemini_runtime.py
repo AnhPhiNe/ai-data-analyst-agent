@@ -289,9 +289,18 @@ def test_choose_tool_with_gemini_retries_transient_errors() -> None:
 def test_choose_tool_with_gemini_returns_friendly_error_after_retries() -> None:
     provider = FakeProvider(
         errors=[
-            TransientLLMError("429"),
-            TransientLLMError("429"),
-            TransientLLMError("429"),
+            TransientLLMError(
+                '{"error":{"message":"Rate limit reached for model qwen/qwen3-32b",'
+                '"type":"tokens","code":"rate_limit_exceeded"}}'
+            ),
+            TransientLLMError(
+                '{"error":{"message":"Rate limit reached for model qwen/qwen3-32b",'
+                '"type":"tokens","code":"rate_limit_exceeded"}}'
+            ),
+            TransientLLMError(
+                '{"error":{"message":"Rate limit reached for model qwen/qwen3-32b",'
+                '"type":"tokens","code":"rate_limit_exceeded"}}'
+            ),
         ]
     )
 
@@ -300,4 +309,24 @@ def test_choose_tool_with_gemini_returns_friendly_error_after_retries() -> None:
     )
 
     assert result.status == "error"
-    assert "quá tải" in result.message
+    assert "rate_limit" in result.message
+    assert "Rate limit reached" in result.message
+    assert "qwen/qwen3-32b" in result.message
+
+
+def test_choose_tool_with_gemini_redacts_provider_error_secrets() -> None:
+    provider = FakeProvider(
+        errors=[
+            TransientLLMError("429 API key AIza123456789012345678901234567890 leaked"),
+            TransientLLMError("429 API key AIza123456789012345678901234567890 leaked"),
+            TransientLLMError("429 API key AIza123456789012345678901234567890 leaked"),
+        ]
+    )
+
+    result = choose_tool_with_gemini(
+        _sample_dataframe(), "Test", provider, sleep_fn=lambda _: None, max_retries=1
+    )
+
+    assert result.status == "error"
+    assert "[REDACTED_API_KEY]" in result.message
+    assert "AIza123456" not in result.message

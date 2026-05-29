@@ -7,6 +7,7 @@ import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
 from backend.agent.column_resolver import (
+    ExpectedType,
     contains_normalized_column,
     normalize_identifier,
     normalize_text,
@@ -44,6 +45,7 @@ CONFIDENCE_CHART_HISTOGRAM = 0.90
 CONFIDENCE_CHART_HEATMAP = 0.88
 CONFIDENCE_CHART_SCATTER = 0.90
 CONFIDENCE_CHART_GENERIC = 0.88
+CONFIDENCE_SQL_FALLBACK = 0.90
 EXPLICIT_NUMERIC_REFERENCE_TOKENS = {
     "age",
     "amount",
@@ -104,7 +106,7 @@ RouteBuilder = Callable[[pd.DataFrame, str], list[RouteCandidate]]
 
 
 def route_question(dataframe: pd.DataFrame, question: str) -> RouterDecision:
-    normalized = normalize_text(question)
+    normalized = normalize_text(_expand_comparison_symbols(question))
     if not normalized:
         return _fallback("Question is empty.")
     return _route_with_candidates(dataframe, normalized)
@@ -150,6 +152,8 @@ def _candidate(
 
 
 def _profile_candidates(normalized: str) -> list[RouteCandidate]:
+    if has_group_intent(normalized):
+        return []
     if has_any_phrase(
         normalized,
         ("bao nhieu dong", "row count", "number of rows", "how many rows", "so dong"),
@@ -452,6 +456,26 @@ def _describe_candidates(
 def _value_count_candidates(
     dataframe: pd.DataFrame, normalized: str
 ) -> list[RouteCandidate]:
+    explicit_frequency_intent = has_any_phrase(
+        normalized,
+        (
+            "value counts",
+            "pho bien",
+            "tan suat",
+            "khac nhau",
+            "distinct",
+            "unique",
+            "gia tri rieng",
+            "so luong gia tri",
+        ),
+    )
+    if (
+        has_any_phrase(normalized, ("top", "cao nhat", "thap nhat"))
+        and _find_metric_column(dataframe, normalized) is not None
+        and not explicit_frequency_intent
+    ):
+        return []
+
     has_value_count_intent = has_any_phrase(
         normalized,
         (
@@ -470,6 +494,11 @@ def _value_count_candidates(
     if not has_value_count_intent:
         return []
     column = _find_column(dataframe, normalized)
+    if column is None:
+        if has_any_phrase(normalized, ("dem", "count", "so dong")) and has_group_intent(
+            normalized
+        ):
+            column = _find_group_column(dataframe, normalized)
     if column is None:
         return []
     return [
@@ -515,12 +544,143 @@ def _sort_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCand
             74,
             _tool(
                 "sort_values",
-                {"column": column, "ascending": ascending, "limit": 10},
+                {
+                    "column": column,
+                    "ascending": ascending,
+                    "limit": _extract_top_n(normalized),
+                },
                 CONFIDENCE_SORT,
             ),
             evidence=2.5,
         )
     ]
+
+
+def _sql_fallback_candidates(
+    dataframe: pd.DataFrame, normalized: str
+) -> list[RouteCandidate]:
+    top_rows = _sql_top_rows_candidate(dataframe, normalized)
+    if top_rows is not None:
+        return [top_rows]
+
+    group_count = _sql_group_count_candidate(dataframe, normalized)
+    if group_count is not None:
+        return [group_count]
+
+    multi_filter = _sql_multi_filter_candidate(dataframe, normalized)
+    if multi_filter is not None:
+        return [multi_filter]
+
+    return []
+
+
+def _sql_top_rows_candidate(
+    dataframe: pd.DataFrame, normalized: str
+) -> RouteCandidate | None:
+    if not has_any_phrase(
+        normalized, ("top", "cao nhat", "highest", "thap nhat", "lowest")
+    ):
+        return None
+    if not has_any_phrase(normalized, ("liet ke", "list", "top")):
+        return None
+
+    metric_column = _find_metric_column(dataframe, normalized)
+    if metric_column is None:
+        return None
+
+    ascending = has_any_phrase(normalized, ("thap nhat", "lowest"))
+    select_columns = _sql_select_columns_for_top_request(
+        dataframe, normalized, metric_column
+    )
+    order_direction = "ASC" if ascending else "DESC"
+    sql = (
+        f"SELECT {', '.join(_quote_identifier(column) for column in select_columns)} "
+        f"FROM dataset ORDER BY {_quote_identifier(metric_column)} {order_direction}"
+    )
+    limit = _extract_top_n(normalized)
+    return _candidate(
+        "sql_fallback",
+        86,
+        _tool(
+            "query_table_sql",
+            {"sql": sql, "limit": limit},
+            CONFIDENCE_SQL_FALLBACK,
+        ),
+        evidence=3.0,
+    )
+
+
+def _sql_group_count_candidate(
+    dataframe: pd.DataFrame, normalized: str
+) -> RouteCandidate | None:
+    if not has_any_phrase(
+        normalized, ("dem", "so dong", "row count", "count rows", "number of rows")
+    ):
+        return None
+    if not has_group_intent(normalized):
+        return None
+
+    group_column = _find_group_column(dataframe, normalized)
+    if group_column is None:
+        return None
+
+    sort_direction = "DESC"
+    if has_any_phrase(normalized, ("tang dan", "ascending", "asc")):
+        sort_direction = "ASC"
+    sql = (
+        f"SELECT {_quote_identifier(group_column)}, COUNT(*) AS row_count "
+        f"FROM dataset GROUP BY {_quote_identifier(group_column)} "
+        f"ORDER BY row_count {sort_direction}"
+    )
+    return _candidate(
+        "sql_fallback",
+        84,
+        _tool(
+            "query_table_sql",
+            {"sql": sql, "limit": _extract_top_n(normalized)},
+            CONFIDENCE_SQL_FALLBACK,
+        ),
+        evidence=3.0,
+    )
+
+
+def _sql_multi_filter_candidate(
+    dataframe: pd.DataFrame, normalized: str
+) -> RouteCandidate | None:
+    if not has_any_phrase(normalized, ("loc", "filter", "where", "cac dong")):
+        return None
+
+    categorical_condition = _extract_categorical_equality_condition(
+        dataframe, normalized
+    )
+    numeric_condition = _extract_numeric_column_condition(dataframe, normalized)
+    if categorical_condition is None or numeric_condition is None:
+        return None
+
+    cat_column, cat_value = categorical_condition
+    num_column, operator, num_value = numeric_condition
+    sql_operator = {
+        "eq": "=",
+        "gt": ">",
+        "gte": ">=",
+        "lt": "<",
+        "lte": "<=",
+    }[operator]
+    sql = (
+        "SELECT * FROM dataset WHERE "
+        f"{_quote_identifier(cat_column)} = {_sql_literal(cat_value)} AND "
+        f"{_quote_identifier(num_column)} {sql_operator} {num_value}"
+    )
+    return _candidate(
+        "sql_fallback",
+        86,
+        _tool(
+            "query_table_sql",
+            {"sql": sql, "limit": _extract_top_n(normalized)},
+            CONFIDENCE_SQL_FALLBACK,
+        ),
+        evidence=3.5,
+    )
 
 
 def _compare_group_candidates(
@@ -803,6 +963,7 @@ ROUTE_BUILDERS: tuple[RouteBuilder, ...] = (
     _distribution_candidates,
     _outlier_candidates,
     _describe_candidates,
+    _sql_fallback_candidates,
     _value_count_candidates,
     _sort_candidates,
     _compare_group_candidates,
@@ -868,6 +1029,13 @@ def _filter_compatible_candidates(
             candidate
             for candidate in filtered
             if candidate.intent not in {"aggregate", "describe"}
+        ]
+    if "sql_fallback" in intents:
+        filtered = [
+            candidate
+            for candidate in filtered
+            if candidate.intent
+            not in {"profile", "value_counts", "sort", "aggregate", "describe"}
         ]
 
     return filtered or candidates
@@ -940,6 +1108,16 @@ def _is_chart_request(normalized: str) -> bool:
 
 def _extract_numeric_condition(normalized: str) -> tuple[str, float] | None:
     patterns = (
+        (r"\bgte\s+(-?\d+(?:\.\d+)?)", "gte"),
+        (r"\blte\s+(-?\d+(?:\.\d+)?)", "lte"),
+        (r"\bgt\s+(-?\d+(?:\.\d+)?)", "gt"),
+        (r"\blt\s+(-?\d+(?:\.\d+)?)", "lt"),
+        (r"\beq\s+(-?\d+(?:\.\d+)?)", "eq"),
+        (r"(?:>=)\s*(-?\d+(?:\.\d+)?)", "gte"),
+        (r"(?:<=)\s*(-?\d+(?:\.\d+)?)", "lte"),
+        (r"(?:>)\s*(-?\d+(?:\.\d+)?)", "gt"),
+        (r"(?:<)\s*(-?\d+(?:\.\d+)?)", "lt"),
+        (r"(?:=|==)\s*(-?\d+(?:\.\d+)?)", "eq"),
         (r"(duoi|nho hon|less than|below|under)\s+(-?\d+(?:\.\d+)?)", "lt"),
         (
             r"(toi da|nho hon hoac bang|at most|less than or equal)\s+(-?\d+(?:\.\d+)?)",
@@ -955,10 +1133,67 @@ def _extract_numeric_condition(normalized: str) -> tuple[str, float] | None:
     for pattern, operator in patterns:
         match = re.search(pattern, normalized)
         if match:
-            value = float(match.group(2))
+            value = float(match.group(match.lastindex or 1))
             if value.is_integer():
                 return operator, int(value)
             return operator, value
+    return None
+
+
+def _extract_numeric_column_condition(
+    dataframe: pd.DataFrame, normalized: str
+) -> tuple[str, str, int | float] | None:
+    operator_patterns = (
+        (r"gte", "gte"),
+        (r"lte", "lte"),
+        (r"gt", "gt"),
+        (r"lt", "lt"),
+        (r"eq", "eq"),
+        (r">=", "gte"),
+        (r"<=", "lte"),
+        (r">", "gt"),
+        (r"<", "lt"),
+        (r"(?:=|==)", "eq"),
+        (r"(?:lon hon|greater than|tren)", "gt"),
+        (r"(?:nho hon|less than|duoi)", "lt"),
+        (r"(?:bang|equal to)", "eq"),
+    )
+    for column in dataframe.columns:
+        column_name = str(column)
+        if not _is_numeric_column(dataframe, column_name):
+            continue
+        normalized_column = _normalize_identifier(column_name)
+        if not _contains_normalized_column(normalized, normalized_column):
+            continue
+        for operator_pattern, operator in operator_patterns:
+            pattern = (
+                rf"{re.escape(normalized_column)}\s*(?:la|is)?\s*"
+                rf"{operator_pattern}\s*(-?\d+(?:\.\d+)?)"
+            )
+            match = re.search(pattern, normalized)
+            if not match:
+                continue
+            value = float(match.group(1))
+            return column_name, operator, int(value) if value.is_integer() else value
+    for operator_pattern, operator in operator_patterns:
+        match = re.search(
+            rf"([a-z0-9 ]{{1,80}}?)\s+{operator_pattern}\s+(-?\d+(?:\.\d+)?)",
+            normalized,
+        )
+        if not match:
+            continue
+        column_text = match.group(1).strip()
+        resolved_column = resolve_column(
+            dataframe, column_text, expected_type="numeric"
+        )
+        if resolved_column is None:
+            continue
+        value = float(match.group(2))
+        return (
+            resolved_column,
+            operator,
+            int(value) if value.is_integer() else value,
+        )
     return None
 
 
@@ -992,6 +1227,98 @@ def _find_categorical_value(
         if candidate in value_lookup:
             return value_lookup[candidate]
     return None
+
+
+def _extract_categorical_equality_condition(
+    dataframe: pd.DataFrame, normalized: str
+) -> tuple[str, str] | None:
+    for column in dataframe.columns:
+        column_name = str(column)
+        if _is_numeric_column(dataframe, column_name):
+            continue
+        normalized_column = _normalize_identifier(column_name)
+        if not _column_is_referenced(dataframe, normalized, column_name, "categorical"):
+            continue
+
+        values = [str(value) for value in dataframe[column_name].dropna().unique()]
+        for value in values:
+            normalized_value = normalize_text(value)
+            if not normalized_value:
+                continue
+            pattern = (
+                rf"{re.escape(normalized_column)}\s*(?:la|=|==|is)?\s*"
+                rf"{re.escape(normalized_value)}"
+            )
+            if re.search(pattern, normalized) or (
+                not _contains_normalized_column(normalized, normalized_column)
+                and re.search(
+                    rf"(?<!\w){re.escape(normalized_value)}(?!\w)", normalized
+                )
+            ):
+                return column_name, value
+    return None
+
+
+def _column_is_referenced(
+    dataframe: pd.DataFrame,
+    normalized: str,
+    column: str,
+    expected_type: ExpectedType | None,
+) -> bool:
+    normalized_column = _normalize_identifier(column)
+    if _contains_normalized_column(normalized, normalized_column):
+        return True
+    return resolve_column(dataframe, normalized, expected_type=expected_type) == column
+
+
+def _sql_select_columns_for_top_request(
+    dataframe: pd.DataFrame, normalized: str, metric_column: str
+) -> list[str]:
+    selected = []
+    if has_any_phrase(normalized, ("user", "khach hang", "customer")):
+        id_column = _find_id_like_column(dataframe)
+        if id_column is not None:
+            selected.append(id_column)
+    selected.append(metric_column)
+    return _dedupe_columns(selected)
+
+
+def _find_id_like_column(dataframe: pd.DataFrame) -> str | None:
+    for column in dataframe.columns:
+        normalized_column = _normalize_identifier(str(column))
+        if normalized_column == "id" or normalized_column.endswith(" id"):
+            return str(column)
+    return None
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result = []
+    for column in columns:
+        if column in seen:
+            continue
+        seen.add(column)
+        result.append(column)
+    return result
+
+
+def _expand_comparison_symbols(text: str) -> str:
+    return (
+        text.replace(">=", " gte ")
+        .replace("<=", " lte ")
+        .replace("==", " eq ")
+        .replace(">", " gt ")
+        .replace("<", " lt ")
+        .replace("=", " eq ")
+    )
 
 
 def _find_metric_column(dataframe: pd.DataFrame, normalized: str) -> str | None:

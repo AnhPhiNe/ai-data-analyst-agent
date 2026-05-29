@@ -369,6 +369,28 @@ def test_router_resolves_vietnamese_single_metric_when_multiple_numeric_columns_
     assert decision.arguments == {"column": "Customer_Age"}
 
 
+def test_router_resolves_explicit_order_count_comparison() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Region": ["North", "South", "North", "West"],
+            "Product_Category": ["A", "B", "A", "C"],
+            "Monthly_Revenue": [1200, 900, 1500, 700],
+            "Order_Count": [3, 1, 4, 2],
+            "Customer_Age": [22, 35, 41, 29],
+        }
+    )
+
+    decision = route_question(dataframe, "So sanh Order_Count theo Region")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "compare_groups"
+    assert decision.arguments == {
+        "metric_column": "Order_Count",
+        "group_by": "Region",
+        "operation": "mean",
+    }
+
+
 def test_router_resolves_vietnamese_distribution_column_for_generic_schema() -> None:
     dataframe = pd.DataFrame(
         {
@@ -441,3 +463,106 @@ def test_router_falls_back_for_low_confidence_question() -> None:
 
     assert decision.route_type == "fallback"
     assert decision.should_use_tool is False
+
+
+def test_router_routes_top_rows_to_sql_fallback() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3"],
+            "department": ["Engineering", "Sales", "Engineering"],
+            "salary": [1000, 3000, 2000],
+        }
+    )
+
+    decision = route_question(dataframe, "Liet ke top 2 user co salary cao nhat")
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert decision.arguments["limit"] == 2
+    assert 'ORDER BY "salary" DESC' in decision.arguments["sql"]
+
+
+def test_router_routes_multi_condition_filter_to_sql_fallback() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3"],
+            "department": ["Engineering", "Sales", "Engineering"],
+            "coef": [2, 8, 6],
+        }
+    )
+
+    decision = route_question(
+        dataframe, "Loc cac dong department la Engineering va coef > 5"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert "\"department\" = 'Engineering'" in decision.arguments["sql"]
+    assert '"coef" > 5' in decision.arguments["sql"]
+
+
+def test_router_routes_salary_multi_condition_filter_to_sql_fallback() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3"],
+            "department": ["Engineering", "Sales", "Engineering"],
+            "salary": [1000, 1200, 1400],
+        }
+    )
+
+    decision = route_question(
+        dataframe, "Loc ra cac dong co department la Engineering va co salary > 1000"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert "\"department\" = 'Engineering'" in decision.arguments["sql"]
+    assert '"salary" > 1000' in decision.arguments["sql"]
+
+
+def test_router_routes_vietnamese_salary_alias_filter_to_sql_fallback() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3"],
+            "department": ["Engineering", "Sales", "Engineering"],
+            "salary": [1000, 1200, 1400],
+        }
+    )
+
+    decision = route_question(
+        dataframe, "Loc ra cac dong co department la Engineering va co luong > 1000"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert '"salary" > 1000' in decision.arguments["sql"]
+
+
+def test_router_routes_english_query_to_vietnamese_columns_with_sql_fallback() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3"],
+            "phong_ban": ["Engineering", "Sales", "Engineering"],
+            "luong": [1000, 1200, 1400],
+        }
+    )
+
+    decision = route_question(
+        dataframe, "Filter rows where department is Engineering and salary > 1000"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert "\"phong_ban\" = 'Engineering'" in decision.arguments["sql"]
+    assert '"luong" > 1000' in decision.arguments["sql"]
+
+
+def test_router_routes_group_row_count_sort_to_sql_fallback() -> None:
+    decision = route_question(
+        _sample_dataframe(), "Dem so dong theo department roi sort giam dan"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "query_table_sql"
+    assert "COUNT(*) AS row_count" in decision.arguments["sql"]
+    assert 'GROUP BY "department"' in decision.arguments["sql"]

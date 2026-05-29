@@ -105,6 +105,190 @@ def test_chat_query_clarifies_missing_explicit_metric_instead_of_guessing() -> N
     assert follow_payload["tool_trace"][-1]["tool_name"] == "compare_groups"
 
 
+def test_chat_query_runs_multi_step_compare_and_outlier() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Nhóm nào có salary trung bình cao nhất và có outlier không?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "outlier" in payload["answer"].lower()
+    trace_tools = [trace["tool_name"] for trace in payload["tool_trace"]]
+    assert "compare_groups" in trace_tools
+    assert "outlier_detection" in trace_tools
+    assert any(
+        trace["source"] == "multi_step_planner" for trace in payload["tool_trace"]
+    )
+
+
+def test_chat_query_runs_multi_step_compare_and_chart() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "So sánh salary theo department và vẽ biểu đồ",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["table"]
+    assert payload["chart_spec"]["chart_type"] == "bar"
+    assert payload["chart_spec"]["x"] == "department"
+    assert payload["chart_spec"]["y"] == "salary"
+
+
+def test_chat_query_runs_multi_step_data_quality_recommendation() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,note\n"
+        "u1,Engineering,1000,note_1\n"
+        "u2,Engineering,1200,note_2\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("quality.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Cột nào giống ID và cột nào nên dùng để phân tích?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "user_id" in payload["answer"]
+    assert "salary" in payload["answer"]
+    assert payload["tool_trace"][-1]["tool_name"] == "data_quality_report"
+
+
+def test_chat_query_runs_multi_step_target_correlation() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Cột nào tương quan mạnh với performance_score?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "correlation_analysis"
+
+
+def test_chat_query_uses_mock_llm_multi_step_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"plan","confidence":0.9,"steps":['
+        '{"tool_name":"describe_numeric","arguments":{"column":"salary"},"purpose":"Mô tả salary"},'
+        '{"tool_name":"generate_chart_spec","arguments":{"chart_type":"histogram","x":"salary","bins":4},"purpose":"Vẽ histogram"}'
+        '],"message":"Lập plan mô tả và vẽ histogram."}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Kiểm tra missing values và vẽ biểu đồ salary",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "chart"
+    assert payload["chart_spec"]["chart_type"] == "histogram"
+    assert any(
+        trace["source"] == "multi_step_planner" for trace in payload["tool_trace"]
+    )
+
+
+def test_chat_query_uses_mock_llm_sql_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,coef\n"
+        "u1,Engineering,1000,2\n"
+        "u2,Engineering,1200,6\n"
+        "u3,Sales,900,7\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("sql.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"query_table_sql",'
+        '"arguments":{"sql":"SELECT user_id, salary FROM dataset WHERE department = '
+        "'Engineering' AND coef > 5 ORDER BY salary DESC"
+        '","limit":10},"message":"Chạy SQL read-only."}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Liệt kê các dòng Engineering có coef lớn hơn 5",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "```sql" in payload["answer"]
+    assert "SELECT user_id, salary FROM dataset" in payload["answer"]
+    assert payload["table"] == [{"user_id": "u2", "salary": 1200}]
+    assert payload["tool_trace"][-1]["tool_name"] == "query_table_sql"
+
+
+def test_chat_query_rejects_unsafe_mock_llm_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+    provider = FakeProvider(
+        '{"action":"tool_call","confidence":0.91,"tool_name":"query_table_sql",'
+        '"arguments":{"sql":"DROP TABLE dataset"},"message":"bad"}'
+    )
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: provider)
+
+    response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Chạy truy vấn bảng linh hoạt"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "clarification"
+    assert "not allowed" in payload["answer"] or "chưa hợp lệ" in payload["answer"]
+
+
 def test_chat_query_returns_table_for_aggregate() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
@@ -1250,3 +1434,142 @@ def test_chat_query_new_data_quality_question_clears_pending_clarification() -> 
     payload = response.json()
     assert payload["response_type"] == "table"
     assert payload["tool_trace"][-1]["tool_name"] == "data_quality_report"
+
+
+def test_chat_query_routes_top_rows_to_sql_without_llm() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,note,coef\n"
+        "u1,Engineering,1000,note_1,2\n"
+        "u2,Engineering,1100,note_2,3.5\n"
+        "u3,Engineering,1200,note_3,4\n"
+        "u4,Engineering,1300,note_4,\n"
+        "u5,Engineering,10000,note_5,10\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("sql_routes.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Liet ke top 3 user co salary cao nhat",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert "```sql" in payload["answer"]
+    assert payload["tool_trace"][-1]["tool_name"] == "query_table_sql"
+    assert payload["table"][0] == {"user_id": "u5", "salary": 10000}
+
+
+def test_chat_query_routes_multi_condition_filter_to_sql_without_llm() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,note,coef\n"
+        "u1,Engineering,1000,note_1,2\n"
+        "u2,Engineering,1100,note_2,3.5\n"
+        "u3,Sales,1200,note_3,4\n"
+        "u4,Engineering,1300,note_4,\n"
+        "u5,Engineering,10000,note_5,10\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("sql_filter.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Loc cac dong department la Engineering va coef > 5",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "query_table_sql"
+    assert payload["table"] == [
+        {
+            "user_id": "u5",
+            "department": "Engineering",
+            "salary": 10000,
+            "note": "note_5",
+            "coef": 10.0,
+        }
+    ]
+
+
+def test_chat_query_routes_vietnamese_salary_alias_filter_to_sql_without_llm() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,note,coef\n"
+        "u1,Engineering,1000,note_1,2\n"
+        "u2,Engineering,1100,note_2,3.5\n"
+        "u3,Sales,1200,note_3,4\n"
+        "u4,Engineering,1300,note_4,\n"
+        "u5,Engineering,10000,note_5,10\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("sql_luong_filter.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Loc ra cac dong co department la Engineering va co luong > 1000",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "query_table_sql"
+    assert [row["user_id"] for row in payload["table"]] == ["u2", "u4", "u5"]
+
+
+def test_chat_query_routes_group_row_count_sort_to_sql_without_llm() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Dem so dong theo department roi sort giam dan",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "query_table_sql"
+    assert payload["table"][0] == {"department": "Engineering", "row_count": 2}
+
+
+def test_chat_query_clarifies_vague_compare_chart_without_schema_error() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "So sanh du lieu nay va ve bieu do",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "clarification"
+    assert "additionalProperties" not in payload["answer"]

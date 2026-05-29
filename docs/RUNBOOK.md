@@ -33,6 +33,13 @@ streamlit run frontend/streamlit_app.py
 
 Use `data/sample_student_performance.csv` for a quick smoke test.
 
+Useful demo questions:
+
+- `Dataset có vấn đề chất lượng dữ liệu gì?`
+- `Nhóm nào có salary trung bình cao nhất và có outlier không?`
+- `So sánh salary theo department và vẽ biểu đồ`
+- `Liệt kê top 10 user có salary cao nhất`
+
 ## 3b. One-command Docker Demo
 
 ```bash
@@ -83,6 +90,10 @@ The project currently uses an in-memory session store with TTL and max-session e
 
 Open the tool trace and check whether `generate_chart_spec` returned a validated chart spec. Invalid specs are rejected before rendering.
 
+### SQL fallback is rejected
+
+SQL fallback is intentionally read-only. Use one `SELECT` or `WITH ... SELECT` query against the `dataset` table only. File access, write statements, multiple statements, and non-`dataset` tables are blocked by validation.
+
 ## 6. Production Notes
 
-This project is intentionally scoped as a portfolio MVP. It now includes structured request logs, request ids, lightweight session ownership support, and basic per-process rate limits, but production still needs persistent storage, real auth, centralized monitoring, and deployment secrets management.
+This project is intentionally scoped as a portfolio MVP. It now includes structured request logs, request ids, lightweight session ownership support, controlled multi-step planning, read-only SQL fallback, and basic per-process rate limits, but production still needs persistent storage, real auth, centralized monitoring, and deployment secrets management.

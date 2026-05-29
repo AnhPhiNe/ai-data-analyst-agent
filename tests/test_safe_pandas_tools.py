@@ -31,6 +31,7 @@ def test_registry_contains_only_expected_mvp_tools() -> None:
         "conditional_percentage",
         "correlation_analysis",
         "generate_chart_spec",
+        "query_table_sql",
     }
 
 
@@ -315,3 +316,30 @@ def test_generate_chart_spec_rejects_high_cardinality_pie() -> None:
 
     assert result.status == "error"
     assert "10 or fewer" in result.message
+
+
+def test_query_table_sql_returns_read_only_query_results() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "query_table_sql",
+        {
+            "sql": "SELECT department, AVG(salary) AS avg_salary FROM dataset GROUP BY department ORDER BY avg_salary DESC",
+            "limit": 5,
+        },
+    )
+
+    assert result.status == "success"
+    assert result.tool_name == "query_table_sql"
+    assert result.table[0]["department"] == "Engineering"
+    assert "avg_salary" in result.table[0]
+
+
+def test_query_table_sql_rejects_write_query() -> None:
+    result = execute_tool(
+        _sample_dataframe(),
+        "query_table_sql",
+        {"sql": "DROP TABLE dataset"},
+    )
+
+    assert result.status == "error"
+    assert "not allowed" in result.message
