@@ -3,12 +3,7 @@ from typing import Any
 
 import pandas as pd
 
-from backend.agent.clarification_memory import (
-    column_options,
-    set_pending_from_question,
-    set_pending_from_tool_call,
-    try_resolve_pending_clarification,
-)
+from backend.agent.clarification_memory import try_resolve_pending_clarification
 from backend.agent.column_argument_repair import repair_tool_column_arguments
 from backend.agent.column_resolver import normalize_text, resolve_column
 from backend.agent.correlation_helpers import (
@@ -112,13 +107,12 @@ def run_agent_turn(
     )
 
     if router_decision.route_type == "clarify":
+        session_store.clear_pending_clarification(session.session_id)
         response = clarification_response(
             session.session_id,
             router_decision.message or "Bạn có thể nói rõ hơn không?",
             traces,
-            options=column_options(session),
         )
-        set_pending_from_question(session, question, response.answer)
         _remember(session.session_id, question, response.answer, "router_clarify")
         return response
 
@@ -137,9 +131,9 @@ def run_agent_turn(
 
     if provider is None:
         skipped_trace = ToolTraceItem(
-            source="gemini",
+            source="llm",
             status="skipped",
-            message="Gemini provider is not configured.",
+            message="LLM provider is not configured.",
         )
         _record_trace(traces, skipped_trace, event_callback)
         response = ChatResponse(
@@ -147,13 +141,12 @@ def run_agent_turn(
             answer=(
                 "Mình chưa đủ tự tin để chọn công cụ phân tích cho câu hỏi này. "
                 "Bạn có thể hỏi rõ hơn bằng cách nêu tên cột/metric trong dataset, "
-                "hoặc cấu hình GEMINI_API_KEY để bật lớp hiểu ngôn ngữ tự nhiên nâng cao."
+                "hoặc cấu hình GEMINI_API_KEY/GROQ_API_KEY để bật lớp hiểu ngôn ngữ tự nhiên nâng cao."
             ),
             response_type="error",
             tool_trace=traces,
-            clarification_options=column_options(session),
         )
-        _remember(session.session_id, question, response.answer, "missing_gemini")
+        _remember(session.session_id, question, response.answer, "missing_llm")
         return response
 
     gemini_result = choose_tool_with_gemini(
@@ -172,7 +165,7 @@ def run_agent_turn(
     _record_trace(
         traces,
         ToolTraceItem(
-            source="gemini",
+            source="llm",
             tool_name=gemini_result.tool_name,
             arguments=gemini_result.arguments,
             status=gemini_result.status,
@@ -183,13 +176,12 @@ def run_agent_turn(
     )
 
     if gemini_result.status == "clarify":
+        session_store.clear_pending_clarification(session.session_id)
         response = clarification_response(
             session.session_id,
             gemini_result.message,
             traces,
-            options=column_options(session),
         )
-        set_pending_from_question(session, question, response.answer)
         _remember(session.session_id, question, response.answer, "gemini_clarify")
         return response
 
@@ -219,7 +211,7 @@ def run_agent_turn(
         tool_name=gemini_result.tool_name,
         arguments=gemini_result.arguments or {},
         traces=traces,
-        source="gemini",
+        source="llm",
         event_callback=event_callback,
     )
     _remember(session.session_id, question, response.answer, "gemini_tool")
@@ -255,7 +247,6 @@ def execute_validated_tool(
             session.session_id,
             target_issue,
             traces,
-            options=column_options(session, numeric_only=True),
         )
 
     validation = validate_tool_call(session.dataframe, tool_name, arguments)
@@ -272,7 +263,7 @@ def execute_validated_tool(
     )
     if (
         not validation.is_valid
-        and source == "gemini"
+        and source == "llm"
         and MAX_GEMINI_VALIDATION_REPAIR_ATTEMPTS > 0
     ):
         repaired_arguments = _repair_after_validation_failure(
@@ -287,7 +278,7 @@ def execute_validated_tool(
                     arguments=repaired_arguments,
                     status="success",
                     message=(
-                        "Retried Gemini-selected tool call once after fixing "
+                        "Retried LLM-selected tool call once after fixing "
                         "a validation issue."
                     ),
                 ),
@@ -307,14 +298,11 @@ def execute_validated_tool(
                 event_callback,
             )
     if not validation.is_valid:
+        session_store.clear_pending_clarification(session.session_id)
         response = clarification_response(
             session.session_id,
             validation_clarification_message(tool_name, validation.message),
             traces,
-            options=_validation_options(session, validation.message),
-        )
-        set_pending_from_tool_call(
-            session, question, tool_name, arguments, response.answer
         )
         return response
 
@@ -546,10 +534,6 @@ def _repair_tool_arguments(
         event_callback,
     )
     return repaired_arguments
-
-
-def _validation_options(session: DatasetSession, validation_message: str) -> list[str]:
-    return column_options(session, numeric_only="must be numeric" in validation_message)
 
 
 def _record_trace(

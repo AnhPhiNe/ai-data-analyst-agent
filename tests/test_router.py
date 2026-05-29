@@ -67,6 +67,46 @@ def test_router_clarifies_describe_non_numeric_column() -> None:
     assert decision.should_use_tool is False
 
 
+def test_router_clarifies_missing_group_only_for_known_metric() -> None:
+    decision = route_question(
+        _sample_dataframe(), "Trung binh salary theo region la bao nhieu?"
+    )
+
+    assert decision.route_type == "clarify"
+    assert decision.arguments["option_type"] == "categorical"
+    assert decision.arguments["metric_column"] == "salary"
+
+
+def test_router_routes_id_analysis_to_data_quality() -> None:
+    decision = route_question(
+        _sample_dataframe(), "Cot nao giong ID va cot nao nen dung de phan tich?"
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "data_quality_report"
+
+
+def test_router_prefers_group_average_when_question_also_mentions_outlier() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3", "u4", "u5"],
+            "department": ["Engineering"] * 5,
+            "salary": [1000, 1100, 1200, 1300, 10000],
+            "note": [f"note_{index}" for index in range(1, 6)],
+        }
+    )
+
+    decision = route_question(
+        dataframe,
+        "Nhom nao co salary trung binh cao nhat, va co bi anh huong boi outlier khong?",
+    )
+
+    assert decision.should_use_tool
+    assert decision.tool_name == "aggregate_metric"
+    assert decision.arguments["metric_column"] == "salary"
+    assert decision.arguments["group_by"] == "department"
+
+
 def test_router_routes_value_counts() -> None:
     decision = route_question(_sample_dataframe(), "Top 2 department phổ biến nhất")
 
@@ -111,6 +151,24 @@ def test_router_routes_compare_groups_question() -> None:
         "group_by": "department",
         "operation": "mean",
     }
+
+
+def test_router_does_not_replace_missing_explicit_metric_with_only_numeric_column() -> (
+    None
+):
+    dataframe = pd.DataFrame(
+        {
+            "department": ["Engineering", "Engineering"],
+            "salary": [1000, 1200],
+        }
+    )
+
+    decision = route_question(dataframe, "So sanh performance_score theo department")
+
+    assert decision.route_type == "clarify"
+    assert decision.should_use_tool is False
+    assert decision.arguments["option_type"] == "numeric"
+    assert decision.arguments["group_by"] == "department"
 
 
 def test_router_routes_sum_metric_by_group() -> None:

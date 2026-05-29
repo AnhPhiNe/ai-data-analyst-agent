@@ -61,7 +61,48 @@ def test_chat_query_routes_distinct_value_count_without_gemini() -> None:
     assert payload["response_type"] == "table"
     assert "Cột department có 3 giá trị khác nhau" in payload["answer"]
     assert payload["tool_trace"][-1]["tool_name"] == "value_counts"
-    assert not any(trace["source"] == "gemini" for trace in payload["tool_trace"])
+    assert not any(trace["source"] == "llm" for trace in payload["tool_trace"])
+
+
+def test_chat_query_clarifies_missing_explicit_metric_instead_of_guessing() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "department,salary\n" "Engineering,1000\n" "Engineering,1200\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("salary_only.csv", csv_content, "text/csv")},
+    )
+    assert upload.status_code == 201
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "So sanh performance_score theo department",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "clarification"
+    assert payload["should_clarify"] is True
+    assert not payload["table"]
+    assert payload["clarification_options"] is None
+    assert "nhập lại thành một câu hỏi đầy đủ" in payload["answer"]
+    assert payload["tool_trace"][-1]["status"] == "clarify"
+
+    follow_up = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "So sanh salary theo department"},
+    )
+
+    assert follow_up.status_code == 200
+    follow_payload = follow_up.json()
+    assert follow_payload["response_type"] == "table"
+    assert "So sánh salary theo department" in follow_payload["answer"]
+    assert follow_payload["tool_trace"][-1]["tool_name"] == "compare_groups"
 
 
 def test_chat_query_returns_table_for_aggregate() -> None:
@@ -119,7 +160,10 @@ def test_chat_query_resolves_distribution_follow_up_as_histogram() -> None:
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "cột performance_score"},
+        json={
+            "session_id": session_id,
+            "question": "Phân phối của performance_score trông như thế nào?",
+        },
     )
 
     assert follow_up.status_code == 200
@@ -148,7 +192,10 @@ def test_chat_query_resolves_generic_chart_follow_up_single_numeric_column_as_hi
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "vẽ cho cột performance_score"},
+        json={
+            "session_id": session_id,
+            "question": "Vẽ histogram cho performance_score",
+        },
     )
 
     assert follow_up.status_code == 200
@@ -177,7 +224,10 @@ def test_chat_query_resolves_generic_chart_follow_up_numeric_and_category_as_bar
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "salary và department"},
+        json={
+            "session_id": session_id,
+            "question": "Vẽ biểu đồ salary theo department",
+        },
     )
 
     assert follow_up.status_code == 200
@@ -205,7 +255,10 @@ def test_chat_query_resolves_generic_chart_follow_up_two_numeric_columns_as_scat
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "salary và performance_score"},
+        json={
+            "session_id": session_id,
+            "question": "Vẽ scatter salary và performance_score",
+        },
     )
 
     assert follow_up.status_code == 200
@@ -231,7 +284,7 @@ def test_chat_query_resolves_generic_chart_follow_up_single_category_as_pie() ->
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "department"},
+        json={"session_id": session_id, "question": "Vẽ biểu đồ tròn cho department"},
     )
 
     assert follow_up.status_code == 200
@@ -244,31 +297,21 @@ def test_chat_query_resolves_generic_chart_follow_up_single_category_as_pie() ->
     }
 
 
-def test_chat_query_keeps_explicit_scatter_pending_with_only_one_numeric_column() -> (
-    None
-):
+def test_chat_query_explicit_scatter_without_columns_asks_for_full_question() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
 
-    first_response = client.post(
+    response = client.post(
         "/chat/query",
         json={"session_id": session_id, "question": "Vẽ scatter cho tôi"},
     )
-    assert first_response.status_code == 200
-    assert first_response.json()["response_type"] == "clarification"
-
-    follow_up = client.post(
-        "/chat/query",
-        json={"session_id": session_id, "question": "salary"},
-    )
-
-    assert follow_up.status_code == 200
-    payload = follow_up.json()
+    assert response.status_code == 200
+    payload = response.json()
     assert payload["response_type"] == "clarification"
     assert payload["should_clarify"] is True
-    assert (
-        session_store.get(session_id).pending_clarification["metric_column"] == "salary"
-    )
+    assert payload["clarification_options"] is None
+    assert "nhập lại thành một câu hỏi đầy đủ" in payload["answer"]
+    assert session_store.get(session_id).pending_clarification is None
 
 
 def test_chat_query_returns_percentage_for_numeric_condition() -> None:
@@ -461,24 +504,21 @@ def test_chat_query_uses_follow_up_to_fill_aggregate_metric_and_group() -> None:
     )
     assert first_response.status_code == 200
     assert first_response.json()["response_type"] == "clarification"
-    assert (
-        session_store.get(session_id).pending_clarification["intent"]
-        == "aggregate_metric"
-    )
+    assert session_store.get(session_id).pending_clarification is None
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "salary va department"},
+        json={
+            "session_id": session_id,
+            "question": "Tinh trung binh salary theo department",
+        },
     )
 
     assert follow_up.status_code == 200
     payload = follow_up.json()
     assert payload["response_type"] == "table"
     assert payload["table"][0] == {"department": "Engineering", "mean_salary": 1350.0}
-    assert any(
-        trace["source"] == "memory" and trace["status"] == "resolved"
-        for trace in payload["tool_trace"]
-    )
+    assert not any(trace["source"] == "memory" for trace in payload["tool_trace"])
     assert session_store.get(session_id).pending_clarification is None
 
 
@@ -506,7 +546,10 @@ def test_chat_query_uses_single_column_follow_up_when_metric_is_known() -> None:
 
     follow_up = client.post(
         "/chat/query",
-        json={"session_id": session_id, "question": "department"},
+        json={
+            "session_id": session_id,
+            "question": "Tinh trung binh salary theo department",
+        },
     )
 
     assert follow_up.status_code == 200
@@ -516,7 +559,7 @@ def test_chat_query_uses_single_column_follow_up_when_metric_is_known() -> None:
     assert payload["table"][0]["mean_salary"] == 1350.0
 
 
-def test_chat_query_keeps_pending_when_follow_up_is_still_ambiguous() -> None:
+def test_chat_query_partial_follow_up_does_not_use_pending_context() -> None:
     client = TestClient(app)
     session_id = _upload_dataset(client)
 
@@ -525,6 +568,7 @@ def test_chat_query_keeps_pending_when_follow_up_is_still_ambiguous() -> None:
         json={"session_id": session_id, "question": "Tinh trung binh theo nhom"},
     )
     assert first_response.status_code == 200
+    assert session_store.get(session_id).pending_clarification is None
 
     follow_up = client.post(
         "/chat/query",
@@ -533,11 +577,8 @@ def test_chat_query_keeps_pending_when_follow_up_is_still_ambiguous() -> None:
 
     assert follow_up.status_code == 200
     payload = follow_up.json()
-    assert payload["response_type"] == "clarification"
-    assert payload["should_clarify"] is True
-    pending = session_store.get(session_id).pending_clarification
-    assert pending["metric_column"] == "salary"
-    assert pending["group_by"] is None
+    assert not any(trace["source"] == "memory" for trace in payload["tool_trace"])
+    assert session_store.get(session_id).pending_clarification is None
 
 
 def test_chat_query_blocks_guardrail_request() -> None:
@@ -603,7 +644,7 @@ def test_chat_query_requires_session_token_when_enabled(
     assert valid_token.status_code == 200
 
 
-def test_chat_query_uses_mock_gemini_when_router_falls_back(
+def test_chat_query_uses_mock_llm_when_router_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = TestClient(app)
@@ -626,10 +667,10 @@ def test_chat_query_uses_mock_gemini_when_router_falls_back(
     payload = response.json()
     assert payload["response_type"] == "table"
     assert payload["table"][0] == {"value": "Engineering", "count": 2, "percent": 50.0}
-    assert any(trace["source"] == "gemini" for trace in payload["tool_trace"])
+    assert any(trace["source"] == "llm" for trace in payload["tool_trace"])
 
 
-def test_chat_query_uses_gemini_when_router_detects_conflicting_intents(
+def test_chat_query_uses_llm_when_router_detects_conflicting_intents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = TestClient(app)
@@ -654,7 +695,7 @@ def test_chat_query_uses_gemini_when_router_detects_conflicting_intents(
     assert payload["tool_trace"][0]["source"] == "router"
     assert payload["tool_trace"][0]["status"] == "fallback"
     assert "conflicting intents" in payload["tool_trace"][0]["message"]
-    assert any(trace["source"] == "gemini" for trace in payload["tool_trace"])
+    assert any(trace["source"] == "llm" for trace in payload["tool_trace"])
     assert payload["tool_trace"][-1]["tool_name"] == "aggregate_metric"
 
 
@@ -711,7 +752,7 @@ def test_chat_query_new_direct_route_clears_stale_pending_after_invalid_tool() -
     )
     assert first_response.status_code == 200
     assert first_response.json()["response_type"] == "clarification"
-    assert session_store.get(session_id).pending_clarification is not None
+    assert session_store.get(session_id).pending_clarification is None
 
     second_response = client.post(
         "/chat/query",
@@ -765,7 +806,7 @@ def test_chat_query_retries_once_after_gemini_validation_failure(
         "choose_tool_with_gemini",
         lambda **kwargs: GeminiRuntimeResult(
             status="tool_call",
-            message="Gemini selected a tool call.",
+            message="LLM selected a tool call.",
             confidence=0.91,
             tool_name="value_counts",
             arguments={"column": "department", "top_n": "2"},
@@ -800,7 +841,7 @@ def test_chat_query_does_not_execute_when_gemini_retry_cannot_repair(
         "choose_tool_with_gemini",
         lambda **kwargs: GeminiRuntimeResult(
             status="tool_call",
-            message="Gemini selected a tool call.",
+            message="LLM selected a tool call.",
             confidence=0.91,
             tool_name="value_counts",
             arguments={"column": "unknown_column", "top_n": 2},
@@ -1138,3 +1179,74 @@ def test_chat_query_stream_success(monkeypatch: pytest.MonkeyPatch) -> None:
     final_events = [event for event in lines if event["type"] == "final"]
     assert len(final_events) == 1
     assert final_events[0]["response"]["response_type"] == "table"
+
+
+def test_chat_query_missing_region_keeps_salary_and_asks_for_group_only() -> None:
+    client = TestClient(app)
+    csv_content = (
+        "user_id,department,salary,note,coef\n"
+        "u1,Engineering,1000,note_1,2\n"
+        "u2,Engineering,1100,note_2,3.5\n"
+        "u3,Engineering,1200,note_3,4\n"
+        "u4,Engineering,1300,note_4,4\n"
+        "u5,Engineering,10000,note_5,10\n"
+    ).encode("utf-8")
+    upload = client.post(
+        "/datasets/upload",
+        files={"file": ("salary.csv", csv_content, "text/csv")},
+    )
+    session_id = upload.json()["session_id"]
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Trung binh salary theo region la bao nhieu?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "clarification"
+    assert payload["clarification_options"] is None
+    assert "nhập lại thành một câu hỏi đầy đủ" in payload["answer"]
+    assert session_store.get(session_id).pending_clarification is None
+
+    follow_up = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Trung binh salary theo department la bao nhieu?",
+        },
+    )
+
+    assert follow_up.status_code == 200
+    follow_payload = follow_up.json()
+    assert follow_payload["response_type"] == "table"
+    assert "salary trung" in follow_payload["answer"]
+    assert follow_payload["tool_trace"][-1]["tool_name"] == "aggregate_metric"
+
+
+def test_chat_query_new_data_quality_question_clears_pending_clarification() -> None:
+    client = TestClient(app)
+    session_id = _upload_dataset(client)
+
+    first_response = client.post(
+        "/chat/query",
+        json={"session_id": session_id, "question": "Tinh trung binh theo nhom"},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["response_type"] == "clarification"
+
+    response = client.post(
+        "/chat/query",
+        json={
+            "session_id": session_id,
+            "question": "Cot nao giong ID va cot nao nen dung de phan tich?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["response_type"] == "table"
+    assert payload["tool_trace"][-1]["tool_name"] == "data_quality_report"

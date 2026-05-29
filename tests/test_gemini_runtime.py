@@ -1,7 +1,11 @@
+import json
+
+import httpx
 import pandas as pd
 import pytest
 
 from backend.agent.gemini_runtime import (
+    GroqProvider,
     LLMRuntimeError,
     TransientLLMError,
     build_tool_selection_prompt,
@@ -76,6 +80,90 @@ def test_parse_tool_selection_response_accepts_markdown_json_block() -> None:
 def test_parse_tool_selection_response_rejects_non_json() -> None:
     with pytest.raises(ValueError, match="JSON object"):
         parse_tool_selection_response("Tôi sẽ dùng tool aggregate_metric")
+
+
+def test_groq_provider_uses_json_object_mode_for_structured_generation() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"action":"clarify","confidence":0.4,'
+                                '"message":"Ban muon cot nao?"}'
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    provider = GroqProvider(
+        api_key="test-key",
+        model="qwen/qwen3-32b",
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = provider.generate_structured("Return JSON", object)  # type: ignore[arg-type]
+    payload = json.loads(requests[0].content)
+
+    assert "Ban muon cot nao" in response
+    assert payload["model"] == "qwen/qwen3-32b"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["reasoning_format"] == "hidden"
+    assert payload["reasoning_effort"] == "none"
+
+
+def test_groq_provider_omits_reasoning_controls_for_llama_models() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"action":"clarify","confidence":0.4,'
+                                '"message":"Ban muon cot nao?"}'
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    provider = GroqProvider(
+        api_key="test-key",
+        model="llama-3.3-70b-versatile",
+        transport=httpx.MockTransport(handler),
+    )
+
+    provider.generate_structured("Return JSON", object)  # type: ignore[arg-type]
+    payload = json.loads(requests[0].content)
+
+    assert payload["model"] == "llama-3.3-70b-versatile"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "reasoning_format" not in payload
+    assert "reasoning_effort" not in payload
+
+
+def test_groq_provider_maps_rate_limit_to_transient_error() -> None:
+    provider = GroqProvider(
+        api_key="test-key",
+        model="qwen/qwen3-32b",
+        transport=httpx.MockTransport(lambda _: httpx.Response(429, text="rate limit")),
+    )
+
+    with pytest.raises(TransientLLMError):
+        provider.generate("hello")
 
 
 def test_choose_tool_with_gemini_returns_validated_tool_call() -> None:

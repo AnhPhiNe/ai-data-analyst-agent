@@ -94,7 +94,7 @@ def test_generate_auto_analysis_limits_charts_and_deduplicates_types() -> None:
     assert "correlation_heatmap" in seen_types
 
 
-def test_generate_auto_analysis_with_gemini_duplicate_fallback() -> None:
+def test_generate_auto_analysis_ignores_llm_for_stable_dashboard_charts() -> None:
     import pandas as pd
     from unittest.mock import MagicMock
 
@@ -106,39 +106,38 @@ def test_generate_auto_analysis_with_gemini_duplicate_fallback() -> None:
         }
     )
 
-    # Mock provider to return duplicate bar chart specs
     mock_provider = MagicMock()
-    mock_provider.generate.return_value = """
-    [
-      {
-        "title": "Salary by Dept",
-        "chart_spec": {
-          "chart_type": "bar",
-          "x": "department",
-          "y": "salary"
-        },
-        "reason": "Compare salary across departments."
-      },
-      {
-        "title": "Age by Dept",
-        "chart_spec": {
-          "chart_type": "bar",
-          "x": "department",
-          "y": "age"
-        },
-        "reason": "Compare age across departments."
-      }
-    ]
-    """
 
     analysis = generate_auto_analysis(dataframe, provider=mock_provider)
-    recommended = analysis["recommended_charts"]
 
-    # The second duplicate bar chart must be filtered out, and a correlation heatmap must be automatically injected
-    seen_types = [item["chart_spec"]["chart_type"] for item in recommended]
-    assert seen_types.count("bar") <= 1
-    assert "correlation_heatmap" in seen_types
-    assert len(recommended) <= 4
+    mock_provider.generate.assert_not_called()
+    assert analysis["ai_status"] == {
+        "used": False,
+        "error": None,
+        "mode": "deterministic",
+    }
+    assert analysis["recommended_charts"]
+
+
+def test_generate_auto_analysis_is_stable_for_same_dataset_with_provider() -> None:
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    dataframe = pd.DataFrame(
+        {
+            "salary": [1000, 1400, 2100, 2800, 3600],
+            "age": [22, 25, 30, 36, 42],
+            "tenure": [1, 2, 4, 6, 9],
+            "department": ["HR", "HR", "Engineering", "Sales", "Sales"],
+        }
+    )
+    mock_provider = MagicMock()
+
+    first = generate_auto_analysis(dataframe, provider=mock_provider)
+    second = generate_auto_analysis(dataframe, provider=mock_provider)
+
+    mock_provider.generate.assert_not_called()
+    assert first["recommended_charts"] == second["recommended_charts"]
 
 
 def test_eta_squared_filters_flat_bar_charts() -> None:

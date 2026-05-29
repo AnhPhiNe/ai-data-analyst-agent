@@ -59,6 +59,8 @@ def try_resolve_pending_clarification(
     intent = pending.get("intent")
     if intent == "aggregate_metric":
         resolved = _resolve_pending_aggregate(session, question, pending)
+    elif intent == "compare_groups":
+        resolved = _resolve_pending_compare_groups(session, question, pending)
     elif intent == "generate_chart_spec":
         resolved = _resolve_pending_chart(session, question, pending)
     elif intent == "correlation_analysis":
@@ -72,9 +74,8 @@ def try_resolve_pending_clarification(
             session.session_id,
             "Mình vẫn chưa xác định đủ cột cần dùng. Bạn hãy nêu rõ metric và nhóm, ví dụ: salary và department.",
             traces,
-            options=column_options(session),
         )
-        session_store.set_pending_clarification(session.session_id, pending)
+        session_store.clear_pending_clarification(session.session_id)
         return response
 
     traces.append(
@@ -97,10 +98,17 @@ def try_resolve_pending_clarification(
 
 
 def set_pending_from_question(
-    session: DatasetSession, question: str, message: str
+    session: DatasetSession,
+    question: str,
+    message: str,
+    initial_arguments: dict[str, Any] | None = None,
 ) -> None:
     pending = _build_pending_from_question(session, question, message)
     if pending is not None:
+        if initial_arguments:
+            for key in ("metric_column", "group_by", "operation", "chart_type"):
+                if key in initial_arguments and not pending.get(key):
+                    pending[key] = initial_arguments[key]
         session_store.set_pending_clarification(session.session_id, pending)
 
 
@@ -136,12 +144,19 @@ def set_pending_from_tool_call(
 
 
 def column_options(
-    session: DatasetSession, numeric_only: bool = False, limit: int = 12
+    session: DatasetSession,
+    numeric_only: bool = False,
+    categorical_only: bool = False,
+    limit: int = 12,
 ) -> list[str]:
     columns: list[str] = []
     for column in session.dataframe.columns:
         column_name = str(column)
         if numeric_only and not _is_numeric_dataset_column(session, column_name):
+            continue
+        if categorical_only and _is_numeric_dataset_column(session, column_name):
+            continue
+        if categorical_only and not _is_categorical_option_column(session, column_name):
             continue
         columns.append(column_name)
     return columns[:limit]
@@ -159,6 +174,20 @@ def _build_pending_from_question(
         return {
             "intent": "aggregate_metric",
             "operation": operation,
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "original_question": question,
+            "message": message,
+        }
+
+    if any(
+        token in normalized
+        for token in ("so sanh", "compare", "comparison", "khac biet", "chenh lech")
+    ):
+        metric_column, group_by = _infer_metric_and_group(session, question)
+        return {
+            "intent": "compare_groups",
+            "operation": "mean",
             "metric_column": metric_column,
             "group_by": group_by,
             "original_question": question,
@@ -200,6 +229,25 @@ def _build_pending_from_question(
 
 def _is_new_standalone_intent(question: str, pending_intent: str) -> bool:
     normalized = normalize_text(question)
+    pending_question_tokens = {
+        "chat luong du lieu",
+        "data quality",
+        "van de du lieu",
+        "giong id",
+        "cot id",
+        "id column",
+        "nen dung de phan tich",
+        "outlier",
+        "ngoai lai",
+        "tuong quan",
+        "correlation",
+        "missing",
+        "thieu du lieu",
+        "bao nhieu dong",
+        "bao nhieu cot",
+    }
+    if any(token in normalized for token in pending_question_tokens):
+        return True
     chart_tokens = (
         "phan phoi",
         "bieu do",
@@ -250,6 +298,20 @@ def _resolve_pending_aggregate(
             "group_by": group_by,
             "operation": str(pending.get("operation", "mean")),
         },
+    }
+
+
+def _resolve_pending_compare_groups(
+    session: DatasetSession,
+    follow_up: str,
+    pending: dict[str, object],
+) -> dict[str, Any] | None:
+    resolved = _resolve_pending_aggregate(session, follow_up, pending)
+    if resolved is None:
+        return None
+    return {
+        "tool_name": "compare_groups",
+        "arguments": resolved["arguments"],
     }
 
 
@@ -404,6 +466,20 @@ def _is_numeric_dataset_column(session: DatasetSession, column: str) -> bool:
     return is_numeric_dtype(session.dataframe[column]) and not is_bool_dtype(
         session.dataframe[column]
     )
+
+
+def _is_categorical_option_column(session: DatasetSession, column: str) -> bool:
+    normalized_column = normalize_text(column.replace("_", " "))
+    if normalized_column == "id" or normalized_column.endswith(" id"):
+        return False
+    if normalized_column in {"note", "notes", "comment", "comments", "description"}:
+        return False
+    series = session.dataframe[column]
+    non_null_count = int(series.notna().sum())
+    if non_null_count <= 0:
+        return False
+    unique_count = int(series.dropna().nunique())
+    return unique_count <= 20 and (unique_count / non_null_count) < 0.95
 
 
 def _has_explicit_chart_type(text: str) -> bool:

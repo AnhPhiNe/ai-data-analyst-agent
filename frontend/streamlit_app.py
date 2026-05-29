@@ -1,4 +1,3 @@
-import io
 import sys
 from pathlib import Path
 
@@ -21,14 +20,19 @@ from frontend.components import (  # noqa: E402
     render_data_explorer_tab,
     render_chat_tab,
 )
-from backend.services.dataset_loader import read_csv_content  # noqa: E402
+from backend.core.config import get_settings  # noqa: E402
+from backend.services.dataset_loader import load_dataframe  # noqa: E402
 
 
 def parse_uploaded_dataframe(filename: str, content: bytes) -> pd.DataFrame:
-    buffer = io.BytesIO(content)
-    if filename.lower().endswith(".xlsx"):
-        return pd.read_excel(buffer)
-    return read_csv_content(content)
+    settings = get_settings()
+    return load_dataframe(
+        filename=filename,
+        content=content,
+        max_upload_mb=settings.max_upload_mb,
+        max_rows=settings.max_rows,
+        max_columns=settings.max_columns,
+    )
 
 
 def clear_dataset_state() -> None:
@@ -434,7 +438,7 @@ st.markdown(
     '<div class="main-title">AI Data Analyst Agent</div>', unsafe_allow_html=True
 )
 st.markdown(
-    '<div class="main-caption">Safe tabular data analysis with FastAPI, Streamlit, pandas tools, Plotly, and optional Gemini.</div>',
+    '<div class="main-caption">Safe tabular data analysis with FastAPI, Streamlit, pandas tools, Plotly, and optional Groq/Qwen planner.</div>',
     unsafe_allow_html=True,
 )
 

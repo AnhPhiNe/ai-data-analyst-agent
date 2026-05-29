@@ -4,6 +4,7 @@ import json
 import time
 from typing import Any, Literal, Protocol
 
+import httpx
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -55,19 +56,18 @@ class GeminiProvider:
         self.model = model
         try:
             from google import genai
-
-            self._client = genai.Client(api_key=api_key)
         except ImportError as exc:
             raise LLMRuntimeError("google-genai is not installed.") from exc
 
+        self._genai = genai
+        self._client = genai.Client(api_key=api_key)
+
     def generate(self, prompt: str) -> str:
         try:
-            from google import genai
-
             response = self._client.models.generate_content(
                 model=self.model,
                 contents=prompt,
-                config=genai.types.GenerateContentConfig(temperature=0.0),
+                config=self._genai.types.GenerateContentConfig(temperature=0.0),
             )
         except Exception as exc:
             if _is_retryable_exception(exc):
@@ -81,19 +81,15 @@ class GeminiProvider:
 
     def generate_structured(self, prompt: str, response_schema: type[BaseModel]) -> str:
         try:
-            from google import genai
-
             response = self._client.models.generate_content(
                 model=self.model,
                 contents=prompt,
-                config=genai.types.GenerateContentConfig(
+                config=self._genai.types.GenerateContentConfig(
                     temperature=0.0,
                     response_mime_type="application/json",
                     response_schema=response_schema,
                 ),
             )
-        except TypeError:
-            return self.generate(prompt)
         except Exception as exc:
             if _is_retryable_exception(exc):
                 raise TransientLLMError(str(exc)) from exc
@@ -103,6 +99,74 @@ class GeminiProvider:
         if not text:
             raise LLMRuntimeError("Gemini returned an empty structured response.")
         return str(text)
+
+
+class GroqProvider:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://api.groq.com/openai/v1/chat/completions",
+        timeout_seconds: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
+        self.transport = transport
+
+    def generate(self, prompt: str) -> str:
+        return self._chat_completion(prompt, json_mode=False)
+
+    def generate_structured(self, prompt: str, response_schema: type[BaseModel]) -> str:
+        return self._chat_completion(prompt, json_mode=True)
+
+    def _chat_completion(self, prompt: str, json_mode: bool) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "stream": False,
+            "max_completion_tokens": 2048,
+        }
+        if _supports_groq_reasoning_controls(self.model):
+            payload["reasoning_format"] = "hidden"
+            payload["reasoning_effort"] = "none"
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        try:
+            with httpx.Client(
+                timeout=self.timeout_seconds, transport=self.transport
+            ) as client:
+                response = client.post(self.base_url, headers=headers, json=payload)
+        except httpx.RequestError as exc:
+            raise TransientLLMError(str(exc)) from exc
+
+        if response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}:
+            raise TransientLLMError(response.text)
+        if response.status_code >= 400:
+            raise LLMRuntimeError(response.text)
+
+        try:
+            data = response.json()
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMRuntimeError("Groq returned an invalid response.") from exc
+
+        if not text:
+            raise LLMRuntimeError("Groq returned an empty response.")
+        return str(text)
+
+
+def _supports_groq_reasoning_controls(model: str) -> bool:
+    normalized = model.lower()
+    return "qwen" in normalized
 
 
 def choose_tool_with_gemini(
@@ -129,11 +193,11 @@ def choose_tool_with_gemini(
     except TransientLLMError:
         return GeminiRuntimeResult(
             status="error",
-            message="Gemini đang tạm thời quá tải. Vui lòng thử lại sau.",
+            message="LLM provider đang tạm thời quá tải. Vui lòng thử lại sau.",
         )
     except (LLMRuntimeError, ValueError) as exc:
         return GeminiRuntimeResult(
-            status="error", message=f"Không thể xử lý phản hồi Gemini: {exc}"
+            status="error", message=f"Không thể xử lý phản hồi LLM provider: {exc}"
         )
 
     if selection.action == "clarify":
@@ -156,7 +220,7 @@ def choose_tool_with_gemini(
     if not selection.tool_name:
         return GeminiRuntimeResult(
             status="error",
-            message="Gemini chọn tool_call nhưng không cung cấp tool_name.",
+            message="LLM provider chọn tool_call nhưng không cung cấp tool_name.",
             confidence=selection.confidence,
             raw_response=raw_response,
         )
@@ -187,13 +251,13 @@ def choose_tool_with_gemini(
         except TransientLLMError:
             return GeminiRuntimeResult(
                 status="error",
-                message="Gemini đang tạm thời quá tải. Vui lòng thử lại sau.",
+                message="LLM provider đang tạm thời quá tải. Vui lòng thử lại sau.",
                 validation_retry_count=retry_count,
             )
         except (LLMRuntimeError, ValueError) as exc:
             return GeminiRuntimeResult(
                 status="error",
-                message=f"Không thể xử lý phản hồi Gemini sau retry: {exc}",
+                message=f"Không thể xử lý phản hồi LLM provider sau retry: {exc}",
                 validation_retry_count=retry_count,
             )
 
@@ -223,9 +287,9 @@ def choose_tool_with_gemini(
         message=(
             selection.message
             or (
-                "Gemini selected a validated tool call after validation retry."
+                "LLM provider selected a validated tool call after validation retry."
                 if retry_count
-                else "Gemini selected a validated tool call."
+                else "LLM provider selected a validated tool call."
             )
         ),
         confidence=selection.confidence,
@@ -344,7 +408,7 @@ def _selection_to_runtime_result(
         )
     return GeminiRuntimeResult(
         status="error",
-        message="Gemini chọn tool_call nhưng không cung cấp tool_name.",
+        message="LLM provider chọn tool_call nhưng không cung cấp tool_name.",
         confidence=selection.confidence,
         raw_response=raw_response,
         validation_retry_count=validation_retry_count,

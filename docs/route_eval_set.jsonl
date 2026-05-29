@@ -57,4 +57,4 @@
 {"id":"vi_alias_057","question":"Phân phối của số giờ ngủ","expected_route":"tool","expected_tool":"generate_chart_spec"}
 {"id":"vi_alias_058","question":"Top loại trường phổ biến nhất","expected_route":"tool","expected_tool":"value_counts"}
 {"id":"en_box_059","question":"Box plot Exam_Score by Gender","expected_route":"tool","expected_tool":"generate_chart_spec"}
-{"id":"vi_pie_060","question":"Vẽ pie chart cho Gender","expected_route":"clarify","expected_tool":null}
+{"id":"vi_pie_060","question":"Vẽ pie chart cho Gender","expected_route":"tool","expected_tool":"generate_chart_spec"}

@@ -29,7 +29,7 @@ Track route type, selected tool, latency, LLM fallback rate, validation failures
 
 ### LLM Provider Abstraction
 
-Keep the current `LLMProvider` protocol, then add provider-specific structured-output implementations for every LLM-backed feature. The tool-selection path already attempts Gemini structured JSON output when the SDK supports it, and falls back to text JSON parsing for compatibility.
+Keep the current `LLMProvider` protocol, then add provider-specific structured-output implementations for every LLM-backed feature. The current tool-selection path supports Gemini structured output and Groq-compatible JSON object mode, then validates parsed output locally before any tool execution.
 
 ### Golden Answer Evaluation
 

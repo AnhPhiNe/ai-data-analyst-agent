@@ -136,7 +136,5 @@ def test_try_resolve_pending_clarification_partial_aggregate_resolution() -> Non
 
     assert res is not None
     assert res.response_type == "clarification"
-    # Should still be pending clarification
-    assert session.pending_clarification is not None
-    assert session.pending_clarification["metric_column"] == "salary"
-    assert session.pending_clarification["group_by"] is None
+    assert "nhập lại thành một câu hỏi đầy đủ" in res.answer
+    assert session.pending_clarification is None

@@ -12,8 +12,11 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="AI Data Analyst Agent", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
+    llm_provider: str = Field(default="gemini", alias="LLM_PROVIDER")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash-lite", alias="GEMINI_MODEL")
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
     max_upload_mb: int = Field(default=10, alias="MAX_UPLOAD_MB")
     max_rows: int = Field(default=100_000, alias="MAX_ROWS")
     max_columns: int = Field(default=200, alias="MAX_COLUMNS")

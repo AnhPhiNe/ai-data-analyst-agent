@@ -11,7 +11,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-`GEMINI_API_KEY` is optional. Without it, the deterministic router and fallback suggestions still work.
+`GEMINI_API_KEY` and `GROQ_API_KEY` are optional. Without an LLM key, the deterministic router and fallback suggestions still work.
 
 ## 2. Start Backend
 
@@ -71,9 +71,9 @@ python scripts/evaluate_golden_answers.py
 
 Make sure FastAPI is running on the URL configured by `BACKEND_URL`.
 
-### Gemini fallback is skipped
+### LLM fallback is skipped
 
-Set `GEMINI_API_KEY` in `.env` and restart the backend.
+Set `LLM_PROVIDER=gemini`, `GEMINI_MODEL=gemini-2.5-flash-lite`, and `GEMINI_API_KEY` in `.env`, then restart the backend. To test Groq instead, set `LLM_PROVIDER=groq`, `GROQ_MODEL=llama-3.3-70b-versatile`, and `GROQ_API_KEY`.
 
 ### Uploaded session disappears
 

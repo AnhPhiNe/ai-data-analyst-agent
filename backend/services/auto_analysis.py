@@ -18,41 +18,25 @@ def generate_auto_analysis(
     profile: dict[str, object] | None = None,
     provider: Any = None,
 ) -> dict[str, object]:
+    del provider
     profile = profile or profile_dataset(dataframe)
     numeric_columns = _numeric_columns(dataframe)
     categorical_columns = _categorical_columns(dataframe)
     correlations = _correlation_highlights(dataframe, numeric_columns)
+    deterministic_recommended = _recommended_charts(
+        dataframe, numeric_columns, categorical_columns, correlations
+    )
 
-    recommended = None
-    ai_status = {"used": False, "error": None}
-
-    if provider is not None:
-        try:
-            recommended = _recommended_charts_via_gemini(
-                dataframe,
-                profile,
-                provider,
-                numeric_columns,
-                categorical_columns,
-                correlations,
-            )
-            if recommended:
-                ai_status["used"] = True
-            else:
-                ai_status["error"] = "AI returned an empty or invalid response."
-        except Exception as e:
-            recommended = None
-            ai_status["error"] = f"AI Error: {str(e)}"
-
-    if not recommended:
-        recommended = _recommended_charts(
-            dataframe, numeric_columns, categorical_columns, correlations
-        )
+    ai_status = {
+        "used": False,
+        "error": None,
+        "mode": "deterministic",
+    }
 
     # --- Post-process: deduplicate types, filter flat bar charts, ensure heatmap & top scatter ---
-    final_recommended = []
+    final_recommended: list[dict[str, Any]] = []
     seen_types: set[str] = set()
-    for item in recommended:
+    for item in deterministic_recommended:
         if not isinstance(item, dict):
             continue
         spec = item.get("chart_spec")
@@ -76,6 +60,15 @@ def generate_auto_analysis(
 
         seen_types.add(c_type)
         final_recommended.append(item)
+
+    if len(final_recommended) < 4:
+        final_recommended, seen_types = _append_chart_recommendations(
+            dataframe,
+            final_recommended,
+            seen_types,
+            deterministic_recommended,
+            max_items=4,
+        )
 
     # Guarantee correlation heatmap when >= 2 numeric columns
     if len(numeric_columns) >= 2 and "correlation_heatmap" not in seen_types:
@@ -114,6 +107,47 @@ def generate_auto_analysis(
             numeric_columns, categorical_columns, correlations
         ),
     }
+
+
+def _append_chart_recommendations(
+    dataframe: pd.DataFrame,
+    selected: list[dict[str, Any]],
+    seen_types: set[str],
+    candidates: list[dict[str, Any]],
+    max_items: int,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    updated = list(selected)
+    seen = set(seen_types)
+    for item in candidates:
+        if len(updated) >= max_items:
+            break
+        c_type = _usable_chart_type(dataframe, item)
+        if not c_type or c_type in seen:
+            continue
+        seen.add(c_type)
+        updated.append(item)
+    return updated, seen
+
+
+def _usable_chart_type(dataframe: pd.DataFrame, item: dict[str, Any]) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    spec = item.get("chart_spec")
+    if not isinstance(spec, dict):
+        return None
+    c_type = spec.get("chart_type")
+    if not isinstance(c_type, str) or not c_type:
+        return None
+
+    if c_type == "bar":
+        x_col = spec.get("x")
+        y_col = spec.get("y")
+        if isinstance(x_col, str) and isinstance(y_col, str):
+            if x_col in dataframe.columns and y_col in dataframe.columns:
+                eta_sq = _eta_squared(dataframe, x_col, y_col)
+                if eta_sq < 0.01:
+                    return None
+    return c_type
 
 
 def _recommended_charts_via_gemini(

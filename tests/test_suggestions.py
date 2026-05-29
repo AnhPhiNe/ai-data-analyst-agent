@@ -78,22 +78,18 @@ def test_generate_suggested_content_uses_fallback_without_provider() -> None:
 def test_fallback_insights_are_grounded_with_numbers() -> None:
     suggested = generate_suggested_content(_sample_dataframe(), provider=None)
 
-    assert 3 <= len(suggested.insights) <= 5
+    assert 1 <= len(suggested.insights) <= 5
     assert all(re.search(r"\d", insight) for insight in suggested.insights)
     assert any(
-        "department: missing 1" in insight and "25%" in insight
+        "department thiếu 1 dòng" in insight and "25%" in insight
         for insight in suggested.insights
     )
     assert any(
-        "mean=" in insight and "median=" in insight and "min-max=" in insight
+        "salary vs tenure_years" in insight and "r=" in insight
         for insight in suggested.insights
     )
-    assert any(
-        'department="Engineering"' in insight
-        and "2 dòng" in insight
-        and "50%" in insight
-        for insight in suggested.insights
-    )
+    assert not any("category nổi bật nhất" in insight for insight in suggested.insights)
+    assert not any("min-max=" in insight for insight in suggested.insights)
 
 
 def test_generate_suggested_content_uses_gemini_and_filters_unknown_structured_columns() -> (
@@ -107,7 +103,7 @@ def test_generate_suggested_content_uses_gemini_and_filters_unknown_structured_c
 
     suggested = generate_suggested_content(_sample_dataframe(), provider=provider)
 
-    assert suggested.source == "gemini"
+    assert suggested.source == "llm"
     assert suggested.questions[0] == "Tính trung bình salary theo department."
     assert len(suggested.questions) > 1
     assert suggested.insights == fallback.insights
@@ -124,7 +120,7 @@ def test_gemini_insights_are_ignored_for_deterministic_templates() -> None:
 
     suggested = generate_suggested_content(_sample_dataframe(), provider=provider)
 
-    assert suggested.source == "gemini"
+    assert suggested.source == "llm"
     assert suggested.questions[0] == "Tính trung bình salary theo department."
     assert len(suggested.questions) > 1
     assert suggested.insights == fallback.insights
@@ -170,7 +166,7 @@ def test_outlier_insight_uses_analyst_wording() -> None:
     suggested = generate_suggested_content(dataframe, provider=None)
 
     assert any(
-        "Tutoring_Sessions: max=8" in insight and "cao bất thường" in insight
+        "Tutoring_Sessions có max=8" in insight and "ngưỡng IQR" in insight
         for insight in suggested.insights
     )
     assert all("giá trị ngoại lệ là" not in insight for insight in suggested.insights)
@@ -195,22 +191,20 @@ def test_correlation_signal_and_insight_when_two_numeric_columns_exist() -> None
     assert any(" vs " in insight and "r=" in insight for insight in suggested.insights)
 
 
-def test_student_like_dataset_returns_five_meaningful_deterministic_insights() -> None:
+def test_student_like_dataset_returns_only_high_value_deterministic_insights() -> None:
     suggested = generate_suggested_content(_student_like_dataframe(), provider=None)
 
-    assert len(suggested.insights) == 5
+    assert 2 <= len(suggested.insights) <= 5
     assert any(
-        "Parental_Education_Level: missing" in insight for insight in suggested.insights
+        "Parental_Education_Level thiếu" in insight for insight in suggested.insights
     )
-    assert any(
-        "mean=" in insight and "min-max=" in insight for insight in suggested.insights
-    )
-    assert any('Internet_Access="Yes"' in insight for insight in suggested.insights)
     assert any("bất thường" in insight for insight in suggested.insights)
     assert any(
         "Attendance vs Exam_Score" in insight and "r=" in insight
         for insight in suggested.insights
     )
+    assert not any("bị lệch phân bố" in insight for insight in suggested.insights)
+    assert not any("min-max=" in insight for insight in suggested.insights)
 
 
 def test_weak_correlation_is_not_highlighted() -> None:
@@ -292,7 +286,7 @@ def test_suggestions_endpoint_uses_mock_provider(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source"] == "gemini"
+    assert payload["source"] == "llm"
     assert (
         payload["questions"][0]
         == "Giá trị nào xuất hiện nhiều nhất trong cột department?"

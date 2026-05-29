@@ -11,9 +11,12 @@ from backend.services.profiling import profile_dataset
 
 MAX_QUESTIONS = 6
 MAX_INSIGHTS = 5
-MIN_INSIGHTS = 3
+MIN_INSIGHTS = 1
 MIN_CORRELATION_TO_HIGHLIGHT = 0.5
 MIN_TOP_CATEGORY_PERCENT = 30.0
+MIN_MISSING_PERCENT_TO_HIGHLIGHT = 5.0
+MIN_GROUP_ETA_SQUARED = 0.05
+MIN_OUTLIER_IQR_SEVERITY = 2.0
 
 SPECULATIVE_WORDING = (
     "có thể do",
@@ -108,7 +111,7 @@ def generate_suggested_content(
     return SuggestedContent(
         questions=questions[:MAX_QUESTIONS],
         insights=fallback.insights,
-        source="gemini",
+        source="llm",
     )
 
 
@@ -205,6 +208,9 @@ def _build_profiling_signals(
         if dataframe is not None
         else [],
         "possible_outliers": _possible_outliers(numeric_summary),
+        "group_difference_candidates": _group_difference_candidates(dataframe)
+        if dataframe is not None
+        else [],
     }
 
 
@@ -269,65 +275,47 @@ def _fallback_insights(
     profile: dict[str, Any], signals: dict[str, Any] | None = None
 ) -> list[str]:
     profiling_signals = signals or _build_profiling_signals(profile)
-    rows = int(profile.get("rows", 0))
-    columns = int(profile.get("columns", 0))
     insights: list[str] = []
 
-    missing_columns = profiling_signals.get("high_missing_columns", [])
-    if missing_columns:
-        item = missing_columns[0]
+    for item in profiling_signals.get("group_difference_candidates", [])[:1]:
         insights.append(
-            f"{item['column']}: missing {_format_count(item['missing_count'])} "
-            f"(~{_format_metric(item['missing_percent'])}%), cao nhất dataset."
-        )
-    else:
-        insights.append(
-            f"Không có giá trị thiếu nào được ghi nhận trong {_format_count(rows)} dòng dữ liệu."
+            f"{item['metric_column']} khác biệt rõ theo {item['group_by']}: "
+            f"{item['top_group']} mean={_format_metric(item['top_mean'])} cao hơn "
+            f"{item['bottom_group']} mean={_format_metric(item['bottom_mean'])} "
+            f"khoảng {_format_metric(item['mean_gap'])} (eta²={_format_metric(item['eta_squared'])}). "
+            "Đây là chart so sánh nhóm đáng ưu tiên."
         )
 
-    for item in profiling_signals.get("numeric_mean_median", [])[:1]:
-        matching_range = _find_signal_by_column(
-            profiling_signals.get("numeric_ranges", []), str(item["column"])
-        )
-        if not matching_range:
-            continue
+    for item in profiling_signals.get("correlation_candidates", [])[:1]:
         insights.append(
-            f"{item['column']}: mean={_format_metric(item['mean'])}, median={_format_metric(item['median'])}, "
-            f"min-max={_format_metric(matching_range['min'])}-{_format_metric(matching_range['max'])} "
-            f"(n={_format_count(item['count'])})."
-        )
-
-    for item in profiling_signals.get("top_categories_with_percentage", [])[:1]:
-        insights.append(
-            f"{item['column']}=\"{item['top_value']}\": {_format_count(item['count'])} dòng "
-            f"(~{_format_metric(item['percentage'])}%), category nổi bật nhất."
+            f"{item['column_a']} vs {item['column_b']} có tương quan {item['direction']} "
+            f"mức {item['strength']} (r={_format_metric(item['correlation'])}); "
+            "nên xem scatter để kiểm tra xu hướng giữa hai biến."
         )
 
     for item in profiling_signals.get("possible_outliers", [])[:1]:
         side_label = "max" if item["side"] == "max" else "min"
         direction_label = "cao" if item["side"] == "max" else "thấp"
         insights.append(
-            f"{item['column']}: {side_label}={_format_metric(item['value'])} "
-            f"{direction_label} bất thường so với ngưỡng IQR {_format_metric(item['threshold'])}."
+            f"{item['column']} có {side_label}={_format_metric(item['value'])} "
+            f"{direction_label} bất thường so với ngưỡng IQR {_format_metric(item['threshold'])}; "
+            "nên kiểm tra điểm cực trị trước khi diễn giải mean."
         )
 
-    for item in profiling_signals.get("correlation_candidates", [])[:1]:
+    missing_columns = profiling_signals.get("high_missing_columns", [])
+    significant_missing = [
+        item
+        for item in missing_columns
+        if float(item.get("missing_percent", 0.0)) >= MIN_MISSING_PERCENT_TO_HIGHLIGHT
+    ]
+    if significant_missing:
+        item = significant_missing[0]
         insights.append(
-            f"{item['column_a']} vs {item['column_b']}: r={_format_metric(item['correlation'])} "
-            f"({item['direction']}, mức {item['strength']})."
+            f"{item['column']} thiếu {_format_count(item['missing_count'])} dòng "
+            f"(~{_format_metric(item['missing_percent'])}%); cần xử lý missing trước khi dùng cột này để so sánh nhóm."
         )
 
     validated = _validate_insights(_dedupe(insights), profile)
-    if len(validated) < MIN_INSIGHTS:
-        validated = _validate_insights(
-            _dedupe(
-                validated
-                + [
-                    f"Dataset có {_format_count(rows)} dòng và {_format_count(columns)} cột."
-                ]
-            ),
-            profile,
-        )
     if len(validated) >= MIN_INSIGHTS:
         return validated[:MAX_INSIGHTS]
     return validated
@@ -544,6 +532,69 @@ def _correlation_candidates(dataframe: pd.DataFrame) -> list[dict[str, object]]:
     )[:5]
 
 
+def _group_difference_candidates(dataframe: pd.DataFrame) -> list[dict[str, object]]:
+    numeric_columns = [
+        str(column)
+        for column in dataframe.select_dtypes(include="number").columns
+        if not _is_id_like_column(str(column))
+    ]
+    categorical_columns = [
+        str(column)
+        for column in dataframe.columns
+        if str(column) not in numeric_columns and not _is_id_like_column(str(column))
+    ]
+
+    candidates: list[dict[str, object]] = []
+    for group_by in categorical_columns[:8]:
+        unique_count = int(dataframe[group_by].nunique(dropna=True))
+        if unique_count < 2 or unique_count > 15:
+            continue
+        for metric_column in numeric_columns[:8]:
+            df_clean = dataframe[[group_by, metric_column]].dropna()
+            if df_clean.empty:
+                continue
+            group_stats = df_clean.groupby(group_by)[metric_column].agg(
+                ["count", "mean"]
+            )
+            if group_stats.shape[0] < 2:
+                continue
+            min_group_count = max(2, int(len(df_clean) * 0.02))
+            if int(group_stats["count"].min()) < min_group_count:
+                continue
+            grand_mean = float(df_clean[metric_column].mean())
+            ss_total = float(((df_clean[metric_column] - grand_mean) ** 2).sum())
+            if ss_total <= 0:
+                continue
+            ss_between = float(
+                (group_stats["count"] * (group_stats["mean"] - grand_mean) ** 2).sum()
+            )
+            eta_squared = round(ss_between / ss_total, 4)
+            if eta_squared < MIN_GROUP_ETA_SQUARED:
+                continue
+
+            ordered = group_stats.sort_values("mean", ascending=False)
+            top_group = ordered.index[0]
+            bottom_group = ordered.index[-1]
+            top_mean = float(ordered.iloc[0]["mean"])
+            bottom_mean = float(ordered.iloc[-1]["mean"])
+            candidates.append(
+                {
+                    "metric_column": metric_column,
+                    "group_by": group_by,
+                    "top_group": str(top_group),
+                    "bottom_group": str(bottom_group),
+                    "top_mean": round(top_mean, 4),
+                    "bottom_mean": round(bottom_mean, 4),
+                    "mean_gap": round(abs(top_mean - bottom_mean), 4),
+                    "eta_squared": eta_squared,
+                }
+            )
+
+    return sorted(
+        candidates, key=lambda item: float(item["eta_squared"]), reverse=True
+    )[:5]
+
+
 def _possible_outliers(
     numeric_summary: list[dict[str, Any]],
 ) -> list[dict[str, object]]:
@@ -561,24 +612,43 @@ def _possible_outliers(
         lower_threshold = float(p25) - 1.5 * iqr
         upper_threshold = float(p75) + 1.5 * iqr
         if float(min_value) < lower_threshold:
+            severity = (lower_threshold - float(min_value)) / iqr
+            if severity < MIN_OUTLIER_IQR_SEVERITY:
+                continue
             outliers.append(
                 {
                     "column": item["column"],
                     "side": "min",
                     "value": min_value,
                     "threshold": round(lower_threshold, 4),
+                    "severity": round(severity, 4),
                 }
             )
         if float(max_value) > upper_threshold:
+            severity = (float(max_value) - upper_threshold) / iqr
+            if severity < MIN_OUTLIER_IQR_SEVERITY:
+                continue
             outliers.append(
                 {
                     "column": item["column"],
                     "side": "max",
                     "value": max_value,
                     "threshold": round(upper_threshold, 4),
+                    "severity": round(severity, 4),
                 }
             )
-    return outliers[:5]
+    return sorted(outliers, key=lambda item: float(item["severity"]), reverse=True)[:5]
+
+
+def _is_id_like_column(column: str) -> bool:
+    lowered = column.lower()
+    return (
+        lowered == "id"
+        or lowered.endswith("_id")
+        or lowered.endswith("id")
+        or lowered.endswith("_key")
+        or lowered.endswith("_code")
+    )
 
 
 def _correlation_strength(coefficient: float) -> str:

@@ -1,6 +1,5 @@
-from io import BytesIO, StringIO
+from io import BytesIO
 from pathlib import Path
-import csv
 
 import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
@@ -42,10 +41,9 @@ def load_dataframe(
 
     suffix = Path(filename).suffix.lower()
     buffer = BytesIO(content)
-
     try:
         if suffix == ".csv":
-            dataframe = read_csv_content(content)
+            dataframe = pd.read_csv(buffer, encoding="utf-8-sig")
         else:
             dataframe = pd.read_excel(buffer, engine="openpyxl")
     except EmptyDataError as exc:
@@ -73,48 +71,3 @@ def load_dataframe(
         raise DatasetLoadError("Uploaded dataset contains an empty column name.")
 
     return dataframe
-
-
-def read_csv_content(content: bytes) -> pd.DataFrame:
-    dataframe = pd.read_csv(BytesIO(content), encoding="utf-8-sig")
-    fallback = _reparse_single_column_delimited_csv(dataframe)
-    return fallback if fallback is not None else dataframe
-
-
-def _reparse_single_column_delimited_csv(
-    dataframe: pd.DataFrame,
-) -> pd.DataFrame | None:
-    if len(dataframe.columns) != 1:
-        return None
-
-    header = str(dataframe.columns[0])
-    delimiter = _detect_delimiter(header)
-    if delimiter is None:
-        return None
-
-    first_column = dataframe.iloc[:, 0].dropna().astype(str)
-    expected_fields = header.count(delimiter) + 1
-    if expected_fields <= 1:
-        return None
-    if not first_column.empty and not all(
-        value.count(delimiter) + 1 == expected_fields for value in first_column
-    ):
-        return None
-
-    rows = [header, *first_column.tolist()]
-    parsed_rows = list(csv.reader(rows, delimiter=delimiter, quotechar="\0"))
-    if not parsed_rows or any(len(row) != expected_fields for row in parsed_rows):
-        return None
-
-    columns = [column.strip() for column in parsed_rows[0]]
-    if any(not column for column in columns):
-        return None
-    repaired_content = "\n".join(rows)
-    return pd.read_csv(StringIO(repaired_content), sep=delimiter)
-
-
-def _detect_delimiter(header: str) -> str | None:
-    candidates = [",", ";", "\t", "|"]
-    counts = {delimiter: header.count(delimiter) for delimiter in candidates}
-    delimiter, count = max(counts.items(), key=lambda item: item[1])
-    return delimiter if count > 0 else None

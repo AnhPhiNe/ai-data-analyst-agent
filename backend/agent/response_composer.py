@@ -78,12 +78,12 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
     if tool_result.tool_name == "aggregate_metric":
         answer = _aggregate_metric_answer(tool_result.table or [])
         if answer:
-            return answer
+            return _append_outlier_context(question, answer, tool_result.data)
 
     if tool_result.tool_name == "compare_groups":
         answer = _compare_groups_answer(tool_result.table or [], tool_result.data)
         if answer:
-            return answer
+            return _append_outlier_context(question, answer, tool_result.data)
 
     if tool_result.tool_name == "generate_chart_spec":
         chart_type = (tool_result.chart_spec or {}).get("chart_type", "chart")
@@ -119,14 +119,27 @@ def clarification_response(
     traces: list[ToolTraceItem],
     options: list[str] | None = None,
 ) -> ChatResponse:
+    del options
     return ChatResponse(
         session_id=session_id,
-        answer=message,
+        answer=_full_question_clarification_message(message),
         response_type="clarification",
         tool_trace=traces,
         should_clarify=True,
-        clarification_options=options or None,
+        clarification_options=None,
     )
+
+
+def _full_question_clarification_message(message: str) -> str:
+    example = (
+        "Bạn hãy nhập lại thành một câu hỏi đầy đủ, ví dụ: "
+        "`Trung bình salary theo department là bao nhiêu?`, "
+        "`So sánh Exam_Score theo Gender`, hoặc "
+        "`Cột salary có outlier không?`"
+    )
+    if "nhập lại thành một câu hỏi đầy đủ" in message:
+        return message
+    return f"{message} {example}"
 
 
 def validation_clarification_message(tool_name: str, validation_message: str) -> str:
@@ -284,6 +297,28 @@ def _compare_groups_answer(
         for row in table[:5]
     )
     return f"So sánh {metric_column} theo {group_by}: {details}."
+
+
+def _append_outlier_context(
+    question: str, answer: str, data: dict[str, Any] | list[Any] | None
+) -> str:
+    if not isinstance(data, dict):
+        return answer
+    normalized = _normalize_answer_text(question)
+    if not any(token in normalized for token in ("outlier", "ngoai lai", "bat thuong")):
+        return answer
+    summary = data.get("outlier_summary")
+    if not isinstance(summary, dict):
+        return answer
+    outlier_count = int(summary.get("outlier_count") or 0)
+    valid_count = int(summary.get("valid_count") or 0)
+    if outlier_count <= 0:
+        return answer + " Không phát hiện outlier theo IQR trong metric này."
+    return (
+        answer
+        + f" Lưu ý: metric này có {_format_number(outlier_count)} / {_format_number(valid_count)} "
+        + "giá trị outlier theo IQR, nên trung bình của nhóm có thể bị kéo lệch; hãy xem thêm median/min/max trong bảng."
+    )
 
 
 def _describe_numeric_answer(question: str, table: list[dict[str, Any]]) -> str | None:

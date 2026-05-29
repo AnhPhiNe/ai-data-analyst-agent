@@ -40,8 +40,8 @@ def test_run_agent_turn_router_clarify() -> None:
 
     assert response.response_type == "clarification"
     assert "Ban muon" in response.answer or "metric" in response.answer
-    assert session.pending_clarification is not None
-    assert session.pending_clarification["intent"] == "aggregate_metric"
+    assert "nhập lại thành một câu hỏi đầy đủ" in response.answer
+    assert session.pending_clarification is None
 
 
 def test_run_agent_turn_router_tool_execution() -> None:
@@ -64,8 +64,8 @@ def test_run_agent_turn_gemini_skipped_when_no_provider() -> None:
     )
 
     assert response.response_type == "error"
-    assert "GEMINI_API_KEY" in response.answer
-    assert response.tool_trace[1].source == "gemini"
+    assert "GEMINI_API_KEY/GROQ_API_KEY" in response.answer
+    assert response.tool_trace[1].source == "llm"
     assert response.tool_trace[1].status == "skipped"
 
 
@@ -80,7 +80,8 @@ def test_run_agent_turn_gemini_clarify() -> None:
     )
 
     assert response.response_type == "clarification"
-    assert response.answer == "Bạn muốn vẽ cột nào?"
+    assert response.answer.startswith("Bạn muốn vẽ cột nào?")
+    assert "nhập lại thành một câu hỏi đầy đủ" in response.answer
 
 
 def test_run_agent_turn_gemini_answer() -> None:
@@ -129,9 +130,7 @@ def test_run_agent_turn_traces_gemini_validation_retry() -> None:
     )
 
     assert response.response_type == "table"
-    gemini_trace = next(
-        trace for trace in response.tool_trace if trace.source == "gemini"
-    )
+    gemini_trace = next(trace for trace in response.tool_trace if trace.source == "llm")
     assert "planner_validation_retries=1" in gemini_trace.message
     assert len(provider.prompts) == 2
 

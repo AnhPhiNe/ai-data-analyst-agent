@@ -272,6 +272,14 @@ def data_quality_report_tool(
         "constant_columns": constant_columns,
         "high_cardinality_columns": high_cardinality_columns,
         "possible_id_columns": possible_id_columns,
+        "analysis_candidate_columns": [
+            str(column)
+            for column in dataframe.columns
+            if str(column)
+            not in set(
+                possible_id_columns + constant_columns + high_cardinality_columns
+            )
+        ],
         "issue_count": len(table),
     }
 
@@ -345,6 +353,12 @@ def aggregate_metric_tool(
         tool_name="aggregate_metric",
         status="success",
         message=f"Computed {operation} of '{metric_column}' by '{group_by}'.",
+        data={
+            "metric_column": metric_column,
+            "group_by": group_by,
+            "operation": operation,
+            "outlier_summary": _numeric_outlier_summary(dataframe, metric_column),
+        },
         table=_records(grouped),
     )
 
@@ -400,6 +414,7 @@ def compare_groups_tool(
             "operation": operation,
             "overall_mean": _round(overall_mean),
             "groups_returned": int(len(rounded)),
+            "outlier_summary": _numeric_outlier_summary(dataframe, metric_column),
         },
         table=_records(rounded),
     )
@@ -435,42 +450,23 @@ def outlier_detection_tool(
     _require_column(dataframe, column)
     _require_numeric(dataframe, column)
 
-    series = dataframe[column].dropna()
-    if series.empty:
+    summary = _numeric_outlier_summary(dataframe, column)
+    if int(summary["valid_count"]) == 0:
         raise ToolValidationError(f"Column '{column}' has no valid numeric values.")
 
-    q1 = float(series.quantile(0.25))
-    q3 = float(series.quantile(0.75))
-    iqr = q3 - q1
-    lower_bound = q1 - (1.5 * iqr)
-    upper_bound = q3 + (1.5 * iqr)
+    lower_bound = float(summary["lower_bound"])
+    upper_bound = float(summary["upper_bound"])
     mask = dataframe[column].notna() & (
         (dataframe[column] < lower_bound) | (dataframe[column] > upper_bound)
     )
     outliers = dataframe.loc[mask].head(limit).copy()
     outliers.insert(0, "row_index", outliers.index)
 
-    outlier_count = int(mask.sum())
-    valid_count = int(series.count())
     return ToolResult(
         tool_name="outlier_detection",
         status="success",
-        message=f"Detected {outlier_count} outlier row(s) in '{column}' using IQR.",
-        data={
-            "column": column,
-            "method": "iqr",
-            "q1": _round(q1),
-            "q3": _round(q3),
-            "iqr": _round(iqr),
-            "lower_bound": _round(lower_bound),
-            "upper_bound": _round(upper_bound),
-            "outlier_count": outlier_count,
-            "valid_count": valid_count,
-            "outlier_percent": round(
-                (outlier_count / valid_count * 100) if valid_count else 0.0, 2
-            ),
-            "returned_rows": int(len(outliers)),
-        },
+        message=f"Detected {summary['outlier_count']} outlier row(s) in '{column}' using IQR.",
+        data={**summary, "returned_rows": int(len(outliers))},
         table=_records(outliers),
     )
 
@@ -715,6 +711,47 @@ def _bounded_int(value: Any, name: str, min_value: int, max_value: int) -> int:
 def _records(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
     clean_frame = dataframe.astype(object).where(pd.notna(dataframe), None)
     return clean_frame.to_dict(orient="records")
+
+
+def _numeric_outlier_summary(dataframe: pd.DataFrame, column: str) -> dict[str, Any]:
+    series = dataframe[column].dropna()
+    if series.empty:
+        return {
+            "column": column,
+            "method": "iqr",
+            "q1": None,
+            "q3": None,
+            "iqr": None,
+            "lower_bound": None,
+            "upper_bound": None,
+            "outlier_count": 0,
+            "valid_count": 0,
+            "outlier_percent": 0.0,
+        }
+    q1 = float(series.quantile(0.25))
+    q3 = float(series.quantile(0.75))
+    iqr = q3 - q1
+    lower_bound = q1 - (1.5 * iqr)
+    upper_bound = q3 + (1.5 * iqr)
+    mask = dataframe[column].notna() & (
+        (dataframe[column] < lower_bound) | (dataframe[column] > upper_bound)
+    )
+    outlier_count = int(mask.sum())
+    valid_count = int(series.count())
+    return {
+        "column": column,
+        "method": "iqr",
+        "q1": _round(q1),
+        "q3": _round(q3),
+        "iqr": _round(iqr),
+        "lower_bound": _round(lower_bound),
+        "upper_bound": _round(upper_bound),
+        "outlier_count": outlier_count,
+        "valid_count": valid_count,
+        "outlier_percent": round(
+            (outlier_count / valid_count * 100) if valid_count else 0.0, 2
+        ),
+    }
 
 
 def _round(value: Any) -> float | None:

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.agent.orchestrator import run_agent_turn
-from backend.agent.gemini_runtime import GeminiProvider, LLMProvider
+from backend.agent.gemini_runtime import GeminiProvider, GroqProvider, LLMProvider
 from backend.agent.suggestions import generate_suggested_content
 from backend.core.config import get_settings
 from backend.core.logging import configure_logging, log_event
@@ -258,9 +258,14 @@ _llm_provider: LLMProvider | None = None
 def get_llm_provider() -> LLMProvider | None:
     global _llm_provider
     if _llm_provider is None:
-        if settings.gemini_api_key:
+        provider_name = settings.llm_provider.strip().lower()
+        if provider_name == "gemini" and settings.gemini_api_key:
             _llm_provider = GeminiProvider(
                 api_key=settings.gemini_api_key, model=settings.gemini_model
+            )
+        elif provider_name == "groq" and settings.groq_api_key:
+            _llm_provider = GroqProvider(
+                api_key=settings.groq_api_key, model=settings.groq_model
             )
     return _llm_provider
 

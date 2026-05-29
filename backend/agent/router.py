@@ -44,6 +44,37 @@ CONFIDENCE_CHART_HISTOGRAM = 0.90
 CONFIDENCE_CHART_HEATMAP = 0.88
 CONFIDENCE_CHART_SCATTER = 0.90
 CONFIDENCE_CHART_GENERIC = 0.88
+EXPLICIT_NUMERIC_REFERENCE_TOKENS = {
+    "age",
+    "amount",
+    "count",
+    "income",
+    "metric",
+    "order",
+    "performance",
+    "percentage",
+    "price",
+    "quantity",
+    "rate",
+    "revenue",
+    "salary",
+    "score",
+}
+EXPLICIT_GROUP_REFERENCE_TOKENS = {
+    "branch",
+    "category",
+    "city",
+    "class",
+    "country",
+    "department",
+    "gender",
+    "group",
+    "location",
+    "phong",
+    "region",
+    "segment",
+    "team",
+}
 
 
 @dataclass(frozen=True)
@@ -255,6 +286,11 @@ def _data_quality_candidates(normalized: str) -> list[RouteCandidate]:
             "high cardinality",
             "id column",
             "cot id",
+            "giong id",
+            "khoa chinh",
+            "primary key",
+            "nen dung de phan tich",
+            "dung de phan tich",
         ),
     ):
         return [
@@ -500,6 +536,28 @@ def _compare_group_candidates(
     group_column = _find_group_column(
         dataframe, normalized, exclude={metric_column} if metric_column else set()
     )
+    if metric_column is None and _has_unmatched_explicit_column_reference(
+        dataframe, normalized
+    ):
+        return [
+            _candidate(
+                "compare_groups",
+                76,
+                RouterDecision(
+                    route_type="clarify",
+                    confidence=0.0,
+                    arguments={
+                        "intent": "compare_groups",
+                        "option_type": "numeric",
+                        "group_by": group_column,
+                    },
+                    message=(
+                        "Mình không tìm thấy metric numeric bạn nêu trong dataset. "
+                        "Hãy chọn một cột numeric hiện có để so sánh."
+                    ),
+                ),
+            )
+        ]
     if metric_column and group_column:
         return [
             _candidate(
@@ -521,7 +579,12 @@ def _compare_group_candidates(
         _candidate(
             "compare_groups",
             76,
-            _clarify("Ban muon so sanh metric numeric nao theo cot nhom nao?"),
+            RouterDecision(
+                route_type="clarify",
+                confidence=0.0,
+                arguments={"intent": "compare_groups", "option_type": "numeric"},
+                message="Bạn muốn so sánh metric numeric nào theo cột nhóm nào?",
+            ),
         )
     ]
 
@@ -558,6 +621,48 @@ def _aggregate_candidates(
                     CONFIDENCE_AGGREGATE,
                 ),
                 evidence=3.0,
+            )
+        ]
+    if metric_column and has_group_:
+        return [
+            _candidate(
+                "aggregate",
+                75,
+                RouterDecision(
+                    route_type="clarify",
+                    confidence=0.0,
+                    arguments={
+                        "intent": "aggregate_metric",
+                        "option_type": "categorical",
+                        "metric_column": metric_column,
+                        "operation": operation,
+                    },
+                    message=(
+                        f"Mình đã nhận metric `{metric_column}` nhưng chưa xác định được cột nhóm. "
+                        "Hãy chọn một cột phân nhóm hiện có."
+                    ),
+                ),
+            )
+        ]
+    if group_column and has_group_:
+        return [
+            _candidate(
+                "aggregate",
+                75,
+                RouterDecision(
+                    route_type="clarify",
+                    confidence=0.0,
+                    arguments={
+                        "intent": "aggregate_metric",
+                        "option_type": "numeric",
+                        "group_by": group_column,
+                        "operation": operation,
+                    },
+                    message=(
+                        f"Mình đã nhận cột nhóm `{group_column}` nhưng chưa xác định được metric numeric. "
+                        "Hãy chọn một cột numeric (cot so) để tính."
+                    ),
+                ),
             )
         ]
     if metric_column and not has_group_:
@@ -652,6 +757,22 @@ def _chart_candidates(dataframe: pd.DataFrame, normalized: str) -> list[RouteCan
                 )
             ]
 
+    if chart_type == "pie":
+        category_column = group_column or _find_column(dataframe, normalized)
+        if category_column and not _is_numeric_column(dataframe, category_column):
+            return [
+                _candidate(
+                    "chart",
+                    80,
+                    _tool(
+                        "generate_chart_spec",
+                        {"chart_type": "pie", "names": category_column},
+                        CONFIDENCE_CHART_GENERIC,
+                    ),
+                    evidence=2.0,
+                )
+            ]
+
     if metric_column and group_column:
         return [
             _candidate(
@@ -724,6 +845,12 @@ def _filter_compatible_candidates(
         filtered = [
             candidate for candidate in filtered if candidate.intent != "describe"
         ]
+        if "aggregate" in intents and has_any_phrase(
+            normalized, ("nhom", "theo", "trung binh", "average", "mean")
+        ):
+            filtered = [
+                candidate for candidate in filtered if candidate.intent != "outlier"
+            ]
     if "percentage" in intents:
         filtered = [
             candidate
@@ -871,6 +998,8 @@ def _find_metric_column(dataframe: pd.DataFrame, normalized: str) -> str | None:
     for column in _matching_columns(dataframe, normalized):
         if _is_numeric_column(dataframe, column):
             return column
+    if _has_unmatched_explicit_column_reference(dataframe, normalized):
+        return None
     resolved = resolve_column(dataframe, normalized, expected_type="numeric")
     if resolved is not None:
         return resolved
@@ -891,13 +1020,33 @@ def _find_group_column(
             continue
         if not _is_numeric_column(dataframe, column):
             return column
+    if _has_unmatched_explicit_group_reference(dataframe, normalized):
+        return None
     categorical_columns = [
         str(column)
         for column in dataframe.columns
         if not _is_numeric_column(dataframe, str(column))
     ]
-    candidates = [column for column in categorical_columns if column not in exclude]
+    candidates = [
+        column
+        for column in categorical_columns
+        if column not in exclude and _is_group_candidate(dataframe, column)
+    ]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _is_group_candidate(dataframe: pd.DataFrame, column: str) -> bool:
+    normalized_column = normalize_identifier(column)
+    if normalized_column == "id" or normalized_column.endswith("_id"):
+        return False
+    if normalized_column in {"note", "notes", "comment", "comments", "description"}:
+        return False
+    non_null_count = int(dataframe[column].notna().sum())
+    if non_null_count <= 0:
+        return False
+    unique_count = int(dataframe[column].dropna().nunique())
+    unique_ratio = unique_count / non_null_count
+    return unique_count <= 20 and unique_ratio < 0.95
 
 
 def _find_correlation_columns(dataframe: pd.DataFrame, normalized: str) -> list[str]:
@@ -971,6 +1120,46 @@ def _matching_columns(dataframe: pd.DataFrame, normalized: str) -> list[str]:
 
     resolved = resolve_column(dataframe, normalized)
     return [resolved] if resolved else []
+
+
+def _has_unmatched_explicit_column_reference(
+    dataframe: pd.DataFrame, normalized: str
+) -> bool:
+    normalized_columns = {
+        _normalize_identifier(str(column)) for column in dataframe.columns
+    }
+    explicit_tokens = re.findall(
+        r"\b[a-zA-Z][a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b", normalized
+    )
+    if any(token not in normalized_columns for token in explicit_tokens):
+        return True
+
+    numeric_column_tokens = set()
+    for column in dataframe.columns:
+        column_name = str(column)
+        if _is_numeric_column(dataframe, column_name):
+            numeric_column_tokens.update(_normalize_identifier(column_name).split())
+
+    return any(
+        token in EXPLICIT_NUMERIC_REFERENCE_TOKENS
+        and token not in numeric_column_tokens
+        for token in normalized.split()
+    )
+
+
+def _has_unmatched_explicit_group_reference(
+    dataframe: pd.DataFrame, normalized: str
+) -> bool:
+    group_column_tokens = set()
+    for column in dataframe.columns:
+        column_name = str(column)
+        if not _is_numeric_column(dataframe, column_name):
+            group_column_tokens.update(_normalize_identifier(column_name).split())
+
+    return any(
+        token in EXPLICIT_GROUP_REFERENCE_TOKENS and token not in group_column_tokens
+        for token in normalized.split()
+    )
 
 
 def _extract_top_n(normalized: str) -> int:
