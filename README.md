@@ -12,6 +12,16 @@ Unlike typical LLM wrappers that blindly execute arbitrary Python code (exposing
 
 ---
 
+## ✨ Features
+
+- **Natural Language Q&A:** Ask analytical questions in Vietnamese or English, and get instant answers without writing SQL or Python.
+- **Automated Data Profiling:** Automatically generates a comprehensive dashboard with data quality reports, missing value checks, and numeric summaries upon file upload.
+- **Dynamic Visualizations:** Generates interactive Plotly charts (bar, scatter, pie, histogram, correlation heatmaps) based on user requests.
+- **Intelligent Clarification Memory:** Retains conversation context and proactively asks follow-up questions if a query is ambiguous or missing required columns.
+- **Enterprise-Grade Safety:** Uses deterministic routing for standard tasks and Sandboxed DuckDB SQL for complex filtering, ensuring zero risk of arbitrary code execution.
+
+---
+
 ## 🏗️ System Architecture
 
 ```mermaid
