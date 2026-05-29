@@ -70,12 +70,24 @@ def try_resolve_pending_clarification(
         return None
 
     if resolved is None:
+        retry_count = int(pending.get("clarification_retry_count", 0)) + 1
+        if retry_count >= 2:
+            response = clarification_response(
+                session.session_id,
+                "Hệ thống vẫn không thể hiểu ý bạn (đã quá số lần thử). Xin vui lòng bắt đầu lại với một câu hỏi mới và nêu tên cột rõ ràng hơn.",
+                traces,
+            )
+            session_store.clear_pending_clarification(session.session_id)
+            return response
+
+        pending["clarification_retry_count"] = retry_count
+        session_store.set_pending_clarification(session.session_id, pending)
+        
         response = clarification_response(
             session.session_id,
-            "Mình vẫn chưa xác định đủ cột cần dùng. Bạn hãy nêu rõ metric và nhóm, ví dụ: salary và department.",
+            "Mình vẫn chưa xác định đủ cột cần dùng. Bạn hãy nêu rõ tên cột, ví dụ: salary và department.",
             traces,
         )
-        session_store.clear_pending_clarification(session.session_id)
         return response
 
     traces.append(
