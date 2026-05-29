@@ -10,6 +10,13 @@
   <img src="https://img.shields.io/github/actions/workflow/status/AnhPhiNe/ai-data-analyst-agent/tests.yml?style=for-the-badge" alt="CI Status">
 </p>
 
+<!-- 
+> **Note for Portfolio:** Add a short demo GIF or a hero screenshot of the application here to grab the recruiter's attention!
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="App Demo" width="800">
+</p>
+-->
+
 An advanced, production-oriented **AI Data Analyst Agent** designed to answer complex analytical questions over tabular datasets. Built as a highly competitive, production-ready open-source system, it bridges the gap between natural language (Vietnamese/English) and data operations without exposing the system to RCE (Remote Code Execution) risks.
 
 Instead of letting the LLM execute arbitrary Python code, it implements a highly reliable **Deterministic Router**, a suite of **Whitelisted Pandas Tools**, a **Sandboxed DuckDB SQL engine** for multi-filter queries, a **Semantic Column Resolver** to handle messy user references, and an **Intelligent Clarification Memory Loop** with bounded retries to resolve ambiguity.
@@ -37,7 +44,7 @@ Instead of letting the LLM execute arbitrary Python code, it implements a highly
 - **Automated Data Profiling:** Automatically generates a comprehensive dashboard with data quality reports, missing value checks, and numeric summaries upon file upload.
 - **Dynamic Visualizations:** Generates interactive Plotly charts (bar, scatter, pie, histogram, correlation heatmaps) based on user requests.
 - **Intelligent Clarification Memory:** Retains conversation context and proactively asks follow-up questions if a query is ambiguous (Max retries: 2).
-- **Enterprise-Grade Safety:** Uses deterministic routing for standard tasks and Sandboxed DuckDB SQL for complex filtering, ensuring zero risk of arbitrary code execution.
+- **Enterprise-Grade Safety & Reliability:** Uses deterministic routing (Regex/Heuristics) for standard tasks (preventing LLM hallucinations and over-compliance) and Sandboxed DuckDB SQL for complex filtering, ensuring zero risk of arbitrary code execution.
 - **Proactive Data Truncation Warnings:** Automatically truncates heavy dataset outputs and alerts the LLM to prevent Context Window overflow.
 
 ---
@@ -276,9 +283,18 @@ When building automated data analytics agents, the biggest vulnerability is **Re
 
 ---
 
+## 🛡️ Fault Tolerance & Observability
+
+To ensure a smooth user experience and maintainable codebase in production, the system incorporates:
+- **Graceful Degradation:** When running in production (`APP_ENV=production`), the backend catches LLM parsing failures and gracefully returns a polite clarification request to the user to prevent UI crashes.
+- **Centralized Server Logging:** All raw exceptions and LLM traces are logged directly to the server console (Observability). This allows developers to monitor and debug production failures asynchronously without exposing sensitive stack traces to the end-user.
+
+---
+
 ## 🏭 Production Notes
 
 When deploying the system in a production environment, keep the following in mind:
+- **Environment Management:** Set `APP_ENV=production` in your `.env` file or cloud secrets to enable Graceful Degradation (hiding raw LLM parsing errors from the end-user).
 - **Rate Limiting:** FastAPI backend includes a lightweight application-level rate limiter to prevent API abuse and manage LLM token costs.
 - **Session Management:** User conversation states and uploaded dataframes are managed in-memory via `session_store` with an automatic cleanup mechanism to prevent memory leaks.
 - **Environment Isolation:** Ensure that the `BACKEND_URL` environment variable is correctly configured on Streamlit Cloud to point to your live FastAPI backend.
@@ -295,8 +311,10 @@ While the system is fully complete, it maintains certain technical limits that d
 
 ### 🔮 Future Roadmap
 1. **DuckDB/Parquet Migration:** Transition from raw Pandas to Parquet formatted files queried directly via DuckDB to scale data volumes and reduce memory usage by 10-100x.
-2. **Multi-File Q&A:** Expand the Agent to handle multiple uploaded tables concurrently and automatically perform JOIN queries (e.g., matching `orders.csv` with `customers.csv`).
+2. **Multi-File Q&A:** Expand the Agent to handle multiple uploaded tables concurrently and automatically perform JOIN queries.
 3. **Advanced LLM Guardrails:** Integrate enterprise-grade guardrail libraries (like NeMo Guardrails) to enforce stricter prompt-injection shields and data-loss prevention.
+4. **Adversarial Evaluation:** Expand the evaluation set with more paraphrases, edge cases, and adversarial questions to improve the router's robustness.
+5. **Production Observability:** Add persistent production observability (e.g., LangSmith, Datadog) for tracing agent reasoning steps if the backend receives real traffic.
 
 ---
 

@@ -197,8 +197,18 @@ def choose_tool_with_gemini(
             message=format_llm_provider_error(exc),
         )
     except (LLMRuntimeError, ValueError) as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"LLM Parsing Error (raw_response might be invalid): {exc}")
+        
+        from backend.core.config import get_settings
+        if get_settings().app_env == "development":
+            return GeminiRuntimeResult(
+                status="error", message=f"Không thể xử lý phản hồi LLM provider (Dev Mode): {exc}"
+            )
         return GeminiRuntimeResult(
-            status="error", message=f"Không thể xử lý phản hồi LLM provider: {exc}"
+            status="clarify", 
+            message="Mình chưa hiểu rõ ý bạn. Bạn có thể nói rõ hơn yêu cầu phân tích dữ liệu không?"
         )
 
     if selection.action == "clarify":
@@ -256,9 +266,20 @@ def choose_tool_with_gemini(
                 validation_retry_count=retry_count,
             )
         except (LLMRuntimeError, ValueError) as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"LLM Parsing Error (retry loop): {exc}")
+            
+            from backend.core.config import get_settings
+            if get_settings().app_env == "development":
+                return GeminiRuntimeResult(
+                    status="error",
+                    message=f"Không thể xử lý phản hồi LLM provider sau retry (Dev Mode): {exc}",
+                    validation_retry_count=retry_count,
+                )
             return GeminiRuntimeResult(
-                status="error",
-                message=f"Không thể xử lý phản hồi LLM provider sau retry: {exc}",
+                status="clarify",
+                message="Mình chưa hiểu rõ ý bạn. Bạn có thể nói rõ hơn yêu cầu phân tích dữ liệu không?",
                 validation_retry_count=retry_count,
             )
 

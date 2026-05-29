@@ -467,6 +467,11 @@ def _value_count_candidates(
             "unique",
             "gia tri rieng",
             "so luong gia tri",
+            "ty le",
+            "phan tram",
+            "percent",
+            "percentage",
+            "ratio",
         ),
     )
     if (
@@ -489,6 +494,11 @@ def _value_count_candidates(
             "unique",
             "gia tri rieng",
             "so luong gia tri",
+            "ty le",
+            "phan tram",
+            "percent",
+            "percentage",
+            "ratio",
         ),
     )
     if not has_value_count_intent:
