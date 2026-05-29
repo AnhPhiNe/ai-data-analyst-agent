@@ -12,26 +12,10 @@ Unlike typical LLM wrappers that blindly execute arbitrary Python code (exposing
 
 ---
 
-## ✨ Key Architectural Highlights
-
-- **🧠 Hybrid Routing Architecture (Cost & Latency Optimized):** 
-  - **Tier 1 (Deterministic):** Fast, rule-based routing for standard statistical tasks (Pandas), bypassing the LLM to save API costs and reduce latency to milliseconds.
-  - **Tier 2 (LLM Fallback):** Complex, multi-conditional reasoning is delegated to the LLM (Gemini 2.5) as a Multi-step Planner.
-- **🛡️ 100% Safe Execution with DuckDB:** 
-  Complex data filtering and extraction queries are handled via an in-memory `DuckDB` SQL engine running on top of Pandas Dataframes. This allows dynamic analytics without allowing the LLM to write executable Python code.
-- **🔄 Intelligent Clarification Memory Loop:** 
-  Equipped with a bounded clarification state machine. If an LLM or user provides underspecified arguments (e.g., missing a column name), the agent pauses execution, retains context, and prompts the user for clarification (with a strict retry limit to prevent infinite loops).
-- **🛑 Proactive Guardrails & Data Truncation:** 
-  Prevents Out-Of-Memory (OOM) crashes by aggressively limiting `.head()` outputs on large datasets. Intelligent truncation warnings are injected directly into the LLM's context window to prevent AI hallucinations about dataset size.
-- **🗺️ Semantic Column Resolution via LLM:** 
-  Completely replaced brittle hardcoded dictionaries with a dynamic LLM-based `ColumnResolver` that semantically maps Vietnamese user queries (e.g., "doanh thu") to exact schema columns (e.g., "Revenue").
-
----
-
 ## 🏗️ System Architecture
 
 ```mermaid
-flowchart TD
+flowchart LR
     U[User] --> FE[Streamlit UI]
     FE --> API[FastAPI API]
     API --> S[Session Store]
