@@ -27,7 +27,8 @@ def build_answer(question: str, tool_result: ToolResult) -> str:
         if not missing_rows:
             return "Dữ liệu không có giá trị thiếu trong các cột đã kiểm tra."
         details = ", ".join(
-            f"{row['column']}: {row['missing_count']}" for row in missing_rows
+            f"{row['column']}: {row['missing_count']} dòng ({row['missing_percent']}%)"
+            for row in missing_rows
         )
         return f"Dữ liệu có giá trị thiếu ở các cột sau: {details}."
 
