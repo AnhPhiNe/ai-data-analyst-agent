@@ -15,14 +15,14 @@ An advanced, production-oriented **AI Data Analyst Agent** designed to answer co
 Instead of letting the LLM execute arbitrary Python code, it implements a highly reliable **Deterministic Router**, a suite of **Whitelisted Pandas Tools**, a **Sandboxed DuckDB SQL engine** for multi-filter queries, a **Semantic Column Resolver** to handle messy user references, and an **Intelligent Clarification Memory Loop** with bounded retries to resolve ambiguity.
 
 > [!NOTE]
-> Dự án được tối ưu hóa cho việc phân tích dữ liệu bảng (Tabular Data Q&A) dạng CSV. Hệ thống được đóng gói hoàn chỉnh với pipeline Auto-Evaluation ngoại tuyến để liên tục đo lường độ chính xác của Router và câu trả lời đầu cuối.
+> This project is optimized for Tabular Data Q&A over CSV files. The system is bundled with a comprehensive offline Auto-Evaluation pipeline to continuously measure the accuracy of both the Router and the End-to-End responses.
 
 ---
 
 ## 🚀 Live Demo
 
 > [!TIP]
-> Bạn có thể trải nghiệm trực tiếp hệ thống thông qua các liên kết bên dưới. Trước khi gửi CV cho nhà tuyển dụng, hãy triển khai dự án lên Cloud và cập nhật các đường dẫn thực tế của bạn tại đây để đạt hiệu quả thuyết phục cao nhất!
+> You can experience the system live through the links below. Before sending your CV, deploy the project to the Cloud and update these live URLs to maximize your portfolio's impact!
 
 | Component | Live Link | Status |
 | :--- | :--- | :--- |
@@ -44,14 +44,14 @@ Instead of letting the LLM execute arbitrary Python code, it implements a highly
 
 ## 🎯 Supported Query Scope
 
-Tác vụ phân tích dữ liệu bảng đòi hỏi độ chính xác cao. Hệ thống được tối ưu hóa tốt nhất để trả lời các nhóm câu hỏi sau:
+Tabular data analysis demands high statistical precision. The agent is optimized to handle the following query categories:
 
-- **Automated Profiling & Quality Checks:** Phát hiện lỗi dữ liệu, tìm giá trị trống/null (`Cột nào bị thiếu dữ liệu nhiều nhất?`), kiểm tra trùng lặp dòng, hoặc thống kê phân phối của toàn bộ dataset.
-- **Descriptive Statistics (Pandas):** Tính toán các đại lượng đặc trưng (`Tính trung bình tuổi của học sinh`, `Tìm giá trị lớn nhất của cột salary`).
-- **Group Aggregations (Pandas):** Nhóm và phân tích dữ liệu (`Trung bình điểm thi theo từng giới tính`, `Tổng doanh thu theo khu vực`).
-- **Dynamic Charts (Plotly):** Tự động phát hiện và vẽ biểu đồ (`Vẽ biểu đồ phân phối điểm số`, `Vẽ biểu đồ tròn cho cột phòng ban`, `Vẽ scatter plot giữa Hours_Studied và Exam_Score`).
-- **Multi-Filter Queries (Sandboxed DuckDB SQL):** Xử lý các câu hỏi phức tạp có điều kiện lọc chéo (`Lọc ra các nhân viên phòng IT có lương lớn hơn 2000 và lấy top 5 người cao nhất`).
-- **Ambiguity Detection & Out-of-Scope:** Phát hiện câu hỏi không rõ ràng để kích hoạt vòng lặp làm rõ (`Tính trung bình theo nhóm` -> Agent sẽ hỏi lại nhóm theo cột nào), hoặc từ chối lịch sự các câu hỏi ngoài phạm vi dữ liệu (`Giá vàng hôm nay thế nào?`).
+- **Automated Profiling & Quality Checks:** Scan for data quality anomalies, locate missing/null values (`Which column has the most missing values?`), find duplicated rows, or generate descriptive statistics summaries.
+- **Descriptive Statistics (Pandas):** Compute key statistical metrics over numeric columns (`What is the average age of students?`, `Find the maximum salary`).
+- **Group Aggregations (Pandas):** Perform multi-group calculations (`Average Exam_Score by Gender`, `Total revenue by region`).
+- **Dynamic Charts (Plotly):** Automatically infer and render plots (`Plot the distribution of exam scores`, `Generate a pie chart for Gender`, `Scatter plot Attendance vs Exam_Score`).
+- **Multi-Filter Queries (Sandboxed DuckDB SQL):** Resolve complex questions containing layered logical conditions (`Filter IT employees with salary > 2000 and get the top 5 highest`).
+- **Ambiguity Detection & Out-of-Scope:** Detect incomplete/ambiguous prompts to trigger the clarification loop (`Calculate the average by group` -> triggers follow-up to ask which column), or politely refuse out-of-domain prompts (`What is the gold price today?`).
 
 ---
 
@@ -191,32 +191,32 @@ docker compose up --build -d
 
 Upload one of the sample datasets located in the `/data/` folder and try asking these example queries:
 
-- `Dataset có vấn đề chất lượng dữ liệu gì?` *(Data Quality Profiling)*
-- `Cột salary có outlier không?` *(Pandas Outlier Detection IQR)*
-- `Tính trung bình doanh thu theo từng phòng ban` *(Pandas Aggregation)*
-- `Lọc ra các nhân viên phòng IT có lương > 2000, lấy top 5 người cao nhất` *(DuckDB SQL Fallback)*
-- `Vẽ biểu đồ phân phối độ tuổi` *(Plotly Chart Generation)*
+- `Does this dataset have any quality issues?` *(Data Quality Profiling)*
+- `Are there any outliers in the salary column?` *(Pandas Outlier Detection IQR)*
+- `Calculate the average revenue by department` *(Pandas Aggregation)*
+- `Filter IT employees with salary > 2000 and get the top 5 highest` *(DuckDB SQL Fallback)*
+- `Plot the distribution of age` *(Plotly Chart Generation)*
 
 ---
 
 ## 🎬 Recommended Demo Flow
 
-Để biểu diễn đầy đủ sức mạnh của Agent trong buổi phỏng vấn hoặc giới thiệu sản phẩm, bạn có thể thực hiện theo kịch bản tương tác (Demo Flow) khuyến nghị dưới đây sau khi tải lên tệp dữ liệu mẫu `data/sample_student_performance.csv`:
+To demonstrate the full power of the Agent during interviews or product showcases, you can follow this interactive **Demo Flow** after uploading the sample dataset `data/sample_student_performance.csv`:
 
-1. **Bước 1 - Khởi đầu ấn tượng:**
-   - *Câu hỏi:* `Dữ liệu này có vấn đề chất lượng gì không?`
-   - *Tính năng kích hoạt:* **Data Quality Profiling & Semantic Column Resolver**. Hệ thống sẽ tự động quét toàn bộ bảng, tìm các cột bị thiếu giá trị (`Teacher_Quality` có 1 dòng null), trùng lặp, hoặc các cột có định dạng ID để trả về một báo cáo chất lượng dữ liệu chi tiết dạng bảng.
-2. **Bước 2 - Vẽ biểu đồ trực quan:**
-   - *Câu hỏi:* `Vẽ cho tôi biểu đồ phân phối điểm số học sinh.`
-   - *Tính năng kích hoạt:* **Plotly Chart Generation**. Hệ thống tự động phân loại đây là yêu cầu vẽ biểu đồ `histogram` trên cột `Exam_Score`, tính toán số lượng cột phân phối (bins) tối ưu và dựng biểu đồ Plotly trực quan cho phép zoom/pan ngay trên UI.
-3. **Bước 3 - Kiểm chứng khả năng làm rõ (Clarification Loop):**
-   - *Câu hỏi:* `Tính điểm trung bình học sinh.`
-   - *Tính năng kích hoạt:* **Clarification Memory Loop**. Vì câu hỏi thiếu cột phân nhóm, Agent sẽ không đoán bừa mà chủ động hỏi lại: *"Bạn muốn tính điểm trung bình học sinh (Exam_Score) theo cột phân nhóm nào? Gợi ý các cột: Gender, School_Type..."*
-   - *Câu trả lời tiếp theo của bạn:* `Theo giới tính`
-   - *Kết quả:* Agent lập tức kết hợp thông tin cũ và mới để gọi công cụ **aggregate_metric** và trả về bảng so sánh điểm thi trung bình giữa Nam (Male) và Nữ (Female).
-4. **Bước 4 - Truy vấn SQL nâng cao chống RCE:**
-   - *Câu hỏi:* `Lọc ra các học sinh có Attendance > 80 và Parental_Involvement là Low, lấy top 5 điểm thi Exam_Score cao nhất.`
-   - *Tính năng kích hoạt:* **Sandboxed DuckDB SQL Fallback**. Khi gặp câu hỏi có điều kiện lọc chéo nhiều cột phức tạp, Router tự động chuyển đổi yêu cầu thành câu lệnh DuckDB SQL an toàn và thực thi trên in-memory sandbox.
+1. **Step 1 - First Impression:**
+   - *Query:* `Does this dataset have any data quality issues?`
+   - *Feature Activated:* **Data Quality Profiling & Semantic Column Resolver**. The system automatically scans the entire table, detects missing values (`Teacher_Quality` has 1 missing row), identifies duplicates, and flags potential ID columns to return a beautiful, comprehensive data quality report.
+2. **Step 2 - Rich Visualization:**
+   - *Query:* `Plot the distribution of student exam scores.`
+   - *Feature Activated:* **Plotly Chart Generation**. The router classifies the query as a `histogram` on the `Exam_Score` column, calculates the optimal number of bins, and renders an interactive, fully zoomable Plotly chart.
+3. **Step 3 - Bounded Clarification Memory:**
+   - *Query:* `Calculate the average exam score.`
+   - *Feature Activated:* **Clarification Memory Loop**. Because the query lacks a grouping column, the Agent prompts you back: *"Which column would you like to group the average Exam_Score by? Suggestions: Gender, School_Type, Parental_Involvement."*
+   - *Your follow-up reply:* `By gender`
+   - *Result:* The Agent combines the memory context and the new input to execute the **aggregate_metric** tool, returning a table comparing Male and Female exam averages.
+4. **Step 4 - Advanced Sandboxed SQL Fallback:**
+   - *Query:* `Filter students with Attendance > 80 and Parental_Involvement is Low, and get the top 5 highest Exam_Scores.`
+   - *Feature Activated:* **Sandboxed DuckDB SQL Fallback**. When faced with highly complex multi-conditional filtering, the Router falls back to generating a safe, standard DuckDB SQL query executed securely on the in-memory sandbox dataset.
 
 ---
 
@@ -238,72 +238,72 @@ mypy backend
 
 ## 📈 Evaluation & Benchmarks
 
-Việc đánh giá hệ thống (Evaluation) đối với các ứng dụng LLM Agent là bắt buộc để chứng minh tính ổn định và khả năng triển khai thực tế. Dự án này được trang bị sẵn **Framework Đánh giá Tự động (Auto-Eval Framework)** với các tập dữ liệu thử nghiệm chuẩn hóa:
+Evaluating LLM Agents is essential to prove stability and readiness for production deployment. This project features a built-in **Auto-Evaluation Framework** with standardized offline test suites:
 
-### 📊 Kết Quả Benchmark Thực Tế (Router & Golden Answers)
+### 📊 Empirical Benchmark Results (Router & Golden Answers)
 
-Hệ thống đã được kiểm thử và đạt các chỉ số ấn tượng dưới đây:
+The system has been evaluated and achieved the following high-precision metrics:
 
-| Bộ Đánh Giá (Eval Set) | Tổng Số Case | Số Case Vượt Qua (Passed) | Độ Chính Xác (Accuracy) | Phạm Vi Đánh Giá (Evaluation Scope) |
+| Evaluation Suite | Total Cases | Passed Cases | Accuracy | Evaluation Scope |
 | :--- | :---: | :---: | :---: | :--- |
-| **Deterministic Router** | 60 | 58 | **96.7%** | Khả năng phân loại ý định chính xác giữa Tiếng Anh/Tiếng Việt, phát hiện đúng Tool tham số hóa vs LLM Fallback. |
-| **E2E Golden Answers** | 22 | 20 | **90.9%** | Đánh giá chuỗi phản hồi cuối cùng (Final Answer), tính chính xác của dữ liệu bảng và cấu trúc đặc tả biểu đồ Plotly. |
+| **Deterministic Router** | 60 | 58 | **96.7%** | Precision of intent routing across English/Vietnamese, matching parameterized safe tools vs. falling back to the LLM Planner. |
+| **E2E Golden Answers** | 22 | 20 | **90.9%** | End-to-end correctness of the final response, tabular structure exactness, and Plotly specification accuracy. |
 
-### 🧪 Kịch Bản Tự Chạy Đánh Giá
+### 🧪 Run Evaluation Scripts
 
-Bạn có thể chạy các kịch bản đánh giá này ngay trong môi trường cục bộ để kiểm chứng độ tin cậy:
+You can run these scripts locally to verify routing accuracy and response quality:
 
 ```bash
-# Đánh giá độ chính xác định tuyến của Router
+# Evaluate router intent classification
 python scripts/evaluate_router.py
 
-# Đánh giá chất lượng câu trả lời đầu cuối (End-to-End Golden Answers)
+# Evaluate end-to-end golden answers
 python scripts/evaluate_golden_answers.py
 ```
 
-- **Tập dữ liệu Router Eval:** [route_eval_set.jsonl](file:///c:/Users/A%20Fee/Desktop/Workspace/ai_data_analyst_agent/docs/route_eval_set.jsonl)
-- **Tập dữ liệu Golden Answer Eval:** [golden_answer_eval_set.jsonl](file:///c:/Users/A%20Fee/Desktop/Workspace/ai_data_analyst_agent/docs/golden_answer_eval_set.jsonl)
+- **Router Eval Dataset:** [route_eval_set.jsonl](file:///c:/Users/A%20Fee/Desktop/Workspace/ai_data_analyst_agent/docs/route_eval_set.jsonl)
+- **Golden Answer Eval Dataset:** [golden_answer_eval_set.jsonl](file:///c:/Users/A%20Fee/Desktop/Workspace/ai_data_analyst_agent/docs/golden_answer_eval_set.jsonl)
 
 ---
 
 ## 🔒 Production Security Architecture
 
-Khi xây dựng các tác vụ phân tích dữ liệu tự động, lỗ hổng lớn nhất thường là nguy cơ **Tấn công Thực thi Mã Từ xa (Remote Code Execution - RCE)** khi để LLM tự viết và chạy code tự do trên máy chủ. Dự án giải quyết triệt để vấn đề này bằng kiến trúc bảo mật **3 lớp bảo vệ**:
+When building automated data analytics agents, the biggest vulnerability is **Remote Code Execution (RCE)** from executing untrusted LLM-generated code. This project solves this with a robust **3-layer security architecture**:
 
-1. **Whitelisted Safe Tools (Pandas API):** Hệ thống không bao giờ thực thi code Python thô từ LLM. Mọi tác vụ tính toán, vẽ biểu đồ hay thống kê đều sử dụng các hàm Pandas an toàn đã được đóng gói sẵn. Đối số đầu vào được kiểm tra kiểu dữ liệu nghiêm ngặt bởi Pydantic.
-2. **Sandboxed DuckDB (SQL Fallback):** Đối với các truy vấn lọc phức tạp (multi-filter), hệ thống sử dụng **DuckDB** chạy trên một tệp SQLite/Parquet in-memory. DuckDB được cấu hình ở chế độ Sandbox hạn chế quyền truy cập hệ thống tệp cục bộ (read-only mode), đảm bảo an toàn tuyệt đối.
-3. **Data Truncation Guardrail:** Tự động giám sát kích thước đầu ra của các truy vấn dữ liệu thô. Nếu kích thước quá lớn, hệ thống sẽ tự động rút gọn (truncation) và gắn cảnh báo để tránh lỗi tràn bộ nhớ ngữ cảnh của LLM (Context Window Overflow).
+1. **Whitelisted Safe Tools (Pandas API):** The system never executes raw LLM-generated Python code. All analytics, statistics, and visualization functions are pre-defined, and their inputs are strictly validated using Pydantic schemas.
+2. **Sandboxed DuckDB (SQL Fallback):** For complex multi-filter queries, the system uses **DuckDB** on an isolated in-memory database. DuckDB runs in a sandboxed, read-only mode, completely eliminating any file system access or RCE risk.
+3. **Data Truncation Guardrail:** Automatically monitors query output sizes. If the output is too heavy, the system truncates it and appends a warning to prevent LLM Context Window Overflow.
 
 ---
 
 ## 🏭 Production Notes
 
-Khi triển khai hệ thống trên môi trường Production thực tế, cần lưu ý các điểm sau:
-- **Rate Limiting:** Backend FastAPI được cấu hình sẵn rate limit gọn nhẹ ở lớp ứng dụng (Application Layer) để chống spam và kiểm soát chi phí gọi API LLM.
-- **Session Management:** Các session hội thoại và dữ liệu dataframe tải lên được quản lý in-memory thông qua `session_store` với cơ chế tự động giải phóng (cleanup) để tránh rò rỉ bộ nhớ (memory leaks).
-- **Environment Isolation:** Hãy đảm bảo biến môi trường `BACKEND_URL` được cấu hình chính xác trên Streamlit Cloud trỏ về FastAPI backend thực tế để giao tiếp thông suốt.
+When deploying the system in a production environment, keep the following in mind:
+- **Rate Limiting:** FastAPI backend includes a lightweight application-level rate limiter to prevent API abuse and manage LLM token costs.
+- **Session Management:** User conversation states and uploaded dataframes are managed in-memory via `session_store` with an automatic cleanup mechanism to prevent memory leaks.
+- **Environment Isolation:** Ensure that the `BACKEND_URL` environment variable is correctly configured on Streamlit Cloud to point to your live FastAPI backend.
 
 ---
 
 ## 🚧 Limitations & Future Roadmap
 
-Mặc dù dự án đã đạt độ hoàn thiện cao cho mục đích Demo và Portfolio, hệ thống vẫn tồn tại một số giới hạn kỹ thuật mà bạn có thể chia sẻ với nhà tuyển dụng để thể hiện tư duy phản biện (Critical Thinking):
+While the project is fully complete for portfolio and demo purposes, it maintains certain technical limits that demonstrate your critical engineering mindset:
 
-### ⚠️ Hạn chế hiện tại (Limitations)
-1. **Bộ nhớ RAM vật lý:** Vì Pandas tải toàn bộ dataframe in-memory, hệ thống chỉ hỗ trợ tốt các tệp CSV có kích thước vừa và nhỏ (< 500MB). Với các file cực lớn, hệ thống sẽ gặp hiện tượng nghẽn cổ chai hoặc cạn kiệt RAM.
-2. **Hỗ trợ định dạng File:** Hệ thống hiện chỉ tối ưu cho tệp dữ liệu phẳng phẳng dạng CSV, chưa tự động parse tốt các tệp Excel có nhiều sheet phức tạp hoặc chứa cấu trúc lồng nhau (nested JSON).
+### ⚠️ Limitations
+1. **Physical RAM Overhead:** Since Pandas loads datasets in-memory, the system is best suited for small to medium CSV files (< 500MB). For massive datasets, an out-of-memory or high latency issue may occur.
+2. **File Format Constraints:** Currently optimized for flat CSV files, and does not natively parse complex multi-sheet Excel workbooks or nested JSON shapes without configuration changes.
 
-### 🔮 Hướng phát triển tương lai (Roadmap)
-1. **DuckDB/Parquet Migration:** Chuyển đổi toàn bộ quá trình xử lý dữ liệu lớn từ Pandas sang định dạng Parquet kết hợp DuckDB để tối ưu hóa bộ nhớ và tăng tốc độ truy vấn lên gấp 10-100 lần.
-2. **Multi-File Q&A:** Mở rộng Agent để có khả năng tải lên đồng thời nhiều bảng dữ liệu và tự động thực hiện phép JOIN (ví dụ: liên kết bảng `orders.csv` với bảng `customers.csv`).
-3. **Advanced LLM Guardrails:** Tích hợp các bộ thư viện bảo mật chuyên dụng như NeMo Guardrails để nâng cao khả năng chống prompt injection và rò rỉ dữ liệu nhạy cảm.
+### 🔮 Future Roadmap
+1. **DuckDB/Parquet Migration:** Transition from raw Pandas to Parquet formatted files queried directly via DuckDB to scale data volumes and reduce memory usage by 10-100x.
+2. **Multi-File Q&A:** Expand the Agent to handle multiple uploaded tables concurrently and automatically perform JOIN queries (e.g., matching `orders.csv` with `customers.csv`).
+3. **Advanced LLM Guardrails:** Integrate enterprise-grade guardrail libraries (like NeMo Guardrails) to enforce stricter prompt-injection shields and data-loss prevention.
 
 ---
 
 ## 🤝 Contributing & License
 
-- **Contributing:** Dự án luôn chào đón mọi đóng góp phát triển (Pull Requests)! Vui lòng đảm bảo code của bạn đi qua tất cả các bài test (`pytest`), định dạng chuẩn với `ruff check .` trước khi đề xuất PR.
-- **License:** Dự án này được phân phối dưới giấy phép **MIT License**. Bạn hoàn toàn được phép sao chép, chỉnh sửa và sử dụng làm Portfolio cho các đợt tuyển dụng AI Engineer.
+- **Contributing:** Contributions are welcome! Please ensure your code passes all unit tests (`pytest`) and is formatted with `ruff check .` before submitting a PR.
+- **License:** Distributed under the MIT License. You are free to clone, modify, and showcase this project in your own AI Engineer portfolios.
 
 ---
 *Built with ❤️ for AI Engineering Interviews.*
