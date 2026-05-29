@@ -174,9 +174,9 @@ Upload one of the sample datasets located in the `/data/` folder and try asking 
 
 ---
 
-## ✅ Run Tests, Evaluation
+## ✅ Run Tests
 
-The project maintains a rigorous testing standard to ensure robust routing, tool execution, and code quality.
+The project maintains a rigorous testing standard to ensure code quality and safety.
 
 ```bash
 # Run Unit Tests
@@ -186,11 +186,25 @@ pytest
 ruff check .
 ruff format --check .
 mypy backend
+```
 
-# Evaluate Agent Capabilities
+---
+
+## 📈 Evaluation
+
+Evaluating LLM behavior and routing logic is critical for production readiness. This project includes dedicated evaluation scripts:
+
+```bash
+# Evaluate Deterministic Router vs LLM Fallback Accuracy
 python scripts/evaluate_router.py
+
+# Evaluate End-to-End Golden Answers
 python scripts/evaluate_golden_answers.py
 ```
+
+**Evaluation Artifacts:**
+- Router Evaluation Set: `docs/route_eval_set.jsonl`
+- Golden Answer Evaluation Set: `docs/golden_answer_eval_set.jsonl`
 
 ---
 *Built with ❤️ for AI Engineering Interviews.*
