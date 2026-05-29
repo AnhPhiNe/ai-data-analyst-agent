@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/github/actions/workflow/status/AnhPhiNe/ai-data-analyst-agent/tests.yml?style=for-the-badge" alt="CI Status">
 </p>
 
-An advanced, production-oriented **AI Data Analyst Agent** designed to answer complex analytical questions over tabular datasets. Built as a highly competitive **AI Engineer Intern/Junior** portfolio project, it bridges the gap between natural language (Vietnamese/English) and data operations without exposing the system to RCE (Remote Code Execution) risks.
+An advanced, production-oriented **AI Data Analyst Agent** designed to answer complex analytical questions over tabular datasets. Built as a highly competitive, production-ready open-source system, it bridges the gap between natural language (Vietnamese/English) and data operations without exposing the system to RCE (Remote Code Execution) risks.
 
 Instead of letting the LLM execute arbitrary Python code, it implements a highly reliable **Deterministic Router**, a suite of **Whitelisted Pandas Tools**, a **Sandboxed DuckDB SQL engine** for multi-filter queries, a **Semantic Column Resolver** to handle messy user references, and an **Intelligent Clarification Memory Loop** with bounded retries to resolve ambiguity.
 
@@ -22,7 +22,7 @@ Instead of letting the LLM execute arbitrary Python code, it implements a highly
 ## 🚀 Live Demo
 
 > [!TIP]
-> You can experience the system live through the links below. Before sending your CV, deploy the project to the Cloud and update these live URLs to maximize your portfolio's impact!
+> You can experience the system live through the links below. Before sharing the project, deploy the application to the Cloud and update these live URLs to showcase your live demo!
 
 | Component | Live Link | Status |
 | :--- | :--- | :--- |
@@ -178,7 +178,7 @@ You can spin up both the backend and frontend simultaneously using Docker:
 docker compose up --build -d
 ```
 
-### Deploying for a Portfolio (Cloud)
+### Production Cloud Deployment
 1. **Backend (Render):** Deploy the repository as a Web Service on [Render.com](https://render.com/). Set your `GEMINI_API_KEY` in Render's environment variables.
 2. **Frontend (Streamlit Community Cloud):** Connect your GitHub repo to [Streamlit Cloud](https://streamlit.io/cloud). Point the main file to `frontend/streamlit_app.py`. In the Streamlit Cloud Secrets, add:
    ```toml
@@ -201,7 +201,7 @@ Upload one of the sample datasets located in the `/data/` folder and try asking 
 
 ## 🎬 Recommended Demo Flow
 
-To demonstrate the full power of the Agent during interviews or product showcases, you can follow this interactive **Demo Flow** after uploading the sample dataset `data/sample_student_performance.csv`:
+To demonstrate the full power of the Agent during product showcases, you can follow this interactive **Demo Flow** after uploading the sample dataset `data/sample_student_performance.csv`:
 
 1. **Step 1 - First Impression:**
    - *Query:* `Does this dataset have any data quality issues?`
@@ -287,7 +287,7 @@ When deploying the system in a production environment, keep the following in min
 
 ## 🚧 Limitations & Future Roadmap
 
-While the project is fully complete for portfolio and demo purposes, it maintains certain technical limits that demonstrate your critical engineering mindset:
+While the system is fully complete, it maintains certain technical limits that demonstrate critical engineering considerations for production scaling:
 
 ### ⚠️ Limitations
 1. **Physical RAM Overhead:** Since Pandas loads datasets in-memory, the system is best suited for small to medium CSV files (< 500MB). For massive datasets, an out-of-memory or high latency issue may occur.
@@ -303,7 +303,7 @@ While the project is fully complete for portfolio and demo purposes, it maintain
 ## 🤝 Contributing & License
 
 - **Contributing:** Contributions are welcome! Please ensure your code passes all unit tests (`pytest`) and is formatted with `ruff check .` before submitting a PR.
-- **License:** Distributed under the MIT License. You are free to clone, modify, and showcase this project in your own AI Engineer portfolios.
+- **License:** Distributed under the MIT License. You are free to clone, modify, and integrate this project in your own enterprise workflows.
 
 ---
-*Built with ❤️ for AI Engineering Interviews.*
+*Built with ❤️ for open-source AI engineering.*

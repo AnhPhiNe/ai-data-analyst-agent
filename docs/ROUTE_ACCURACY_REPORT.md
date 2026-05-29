@@ -1,6 +1,6 @@
 # Router Accuracy Report
 
-This report documents a lightweight deterministic routing eval for the portfolio demo.
+This report documents a lightweight deterministic routing eval for the stable MVP release.
 
 ## Scope
 
@@ -33,7 +33,7 @@ The router is heuristic, so test count alone does not prove language-routing qua
 
 ## Interpreting Results
 
-This is not a production NLU benchmark. It is a small regression suite for portfolio-level routing behavior. A production version should add:
+This is a regression suite for initial routing behavior verification. A production version should add:
 
 - Multiple datasets with different schemas.
 - More natural paraphrases from real users.

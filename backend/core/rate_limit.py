@@ -7,7 +7,7 @@ from time import monotonic
 
 @dataclass
 class InMemoryRateLimiter:
-    """Small per-process rate limiter for portfolio demo endpoints."""
+    """Small per-process rate limiter for production endpoints."""
 
     max_requests: int
     window_seconds: int

@@ -299,7 +299,7 @@ with st.sidebar:
         <div style="text-align: center; margin-bottom: 25px; padding-top: 10px;">
             <div style="font-size: 48px; margin-bottom: 8px;">🤖</div>
             <div style="font-size: 20px; font-weight: 700; color: #0f172a; letter-spacing: -0.5px;">Data Agent Hub</div>
-            <div class="sidebar-badge">Portfolio MVP</div>
+            <div class="sidebar-badge">v1.0 Stable</div>
         </div>
         """,
         unsafe_allow_html=True,

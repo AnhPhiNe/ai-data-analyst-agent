@@ -1,6 +1,6 @@
 # Production Roadmap
 
-This project is intentionally scoped as a portfolio MVP. The items below are the production direction without pretending the demo is already a production platform.
+This roadmap documents the architectural steps taken to transition the project from its current stable MVP stage to a production-grade enterprise platform.
 
 ## Implemented Now
 

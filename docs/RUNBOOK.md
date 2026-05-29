@@ -1,6 +1,6 @@
 # Runbook
 
-This runbook documents the local development and portfolio demo flow.
+This runbook documents the local development and stable production deployment flow.
 
 ## 1. Install
 
@@ -96,4 +96,4 @@ SQL fallback is intentionally read-only. Use one `SELECT` or `WITH ... SELECT` q
 
 ## 6. Production Notes
 
-This project is intentionally scoped as a portfolio MVP. It now includes structured request logs, request ids, lightweight session ownership support, controlled multi-step planning, read-only SQL fallback, and basic per-process rate limits, but production still needs persistent storage, real auth, centralized monitoring, and deployment secrets management.
+This project is currently scoped as a stable lightweight MVP. It now includes structured request logs, request ids, lightweight session ownership support, controlled multi-step planning, read-only SQL fallback, and basic per-process rate limits, but full production scaling still needs persistent storage, real auth, centralized monitoring, and deployment secrets management.
