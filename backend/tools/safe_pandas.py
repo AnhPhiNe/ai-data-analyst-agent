@@ -16,6 +16,13 @@ from backend.visualization.chart_specs import (
 
 ToolStatus = Literal["success", "error"]
 
+
+def _truncate_warning(total: int, limit: int) -> str:
+    if total > limit:
+        return f" (Đã tìm thấy {total} kết quả, nhưng chỉ hiển thị {limit} dòng đầu tiên để tối ưu hiệu suất)"
+    return ""
+
+
 DANGEROUS_ARG_KEYS = {
     "__class__",
     "__dict__",
@@ -309,10 +316,12 @@ def value_counts_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Too
         for value, count in counts.items()
     ]
 
+    unique_count = int(dataframe[column].dropna().astype(str).nunique())
     return ToolResult(
         tool_name="value_counts",
         status="success",
-        message=f"Computed top {len(table)} values for '{column}'.",
+        message=f"Computed top {len(table)} values for '{column}'."
+        + _truncate_warning(unique_count, top_n),
         data={
             "column": column,
             "unique_count": int(dataframe[column].dropna().astype(str).nunique()),
@@ -348,12 +357,14 @@ def aggregate_metric_tool(
     )
     result_column = f"{operation}_{metric_column}"
     grouped = grouped.rename(columns={metric_column: result_column})
+    total_rows = len(grouped)
     grouped = grouped.sort_values(result_column, ascending=False).head(limit)
 
     return ToolResult(
         tool_name="aggregate_metric",
         status="success",
-        message=f"Computed {operation} of '{metric_column}' by '{group_by}'.",
+        message=f"Computed {operation} of '{metric_column}' by '{group_by}'."
+        + _truncate_warning(total_rows, limit),
         data={
             "metric_column": metric_column,
             "group_by": group_by,
@@ -398,6 +409,7 @@ def compare_groups_tool(
     }
     grouped = grouped.rename(columns=rename_map)
     sort_column = rename_map.get(operation, f"mean_{metric_column}")
+    total_rows = len(grouped)
     grouped = grouped.sort_values(sort_column, ascending=False).head(limit)
 
     rounded = grouped.copy()
@@ -408,7 +420,8 @@ def compare_groups_tool(
     return ToolResult(
         tool_name="compare_groups",
         status="success",
-        message=f"Compared '{metric_column}' across groups in '{group_by}'.",
+        message=f"Compared '{metric_column}' across groups in '{group_by}'."
+        + _truncate_warning(total_rows, limit),
         data={
             "metric_column": metric_column,
             "group_by": group_by,
@@ -429,13 +442,14 @@ def sort_values_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
         arguments.get("limit", 10), "limit", min_value=1, max_value=100
     )
 
+    total_rows = len(dataframe)
     sorted_frame = dataframe.sort_values(
         column, ascending=ascending, na_position="last"
     ).head(limit)
     return ToolResult(
         tool_name="sort_values",
         status="success",
-        message=f"Sorted rows by '{column}'.",
+        message=f"Sorted rows by '{column}'." + _truncate_warning(total_rows, limit),
         table=_records(sorted_frame),
     )
 
@@ -460,13 +474,15 @@ def outlier_detection_tool(
     mask = dataframe[column].notna() & (
         (dataframe[column] < lower_bound) | (dataframe[column] > upper_bound)
     )
+    total_outliers = int(mask.sum())
     outliers = dataframe.loc[mask].head(limit).copy()
     outliers.insert(0, "row_index", outliers.index)
 
     return ToolResult(
         tool_name="outlier_detection",
         status="success",
-        message=f"Detected {summary['outlier_count']} outlier row(s) in '{column}' using IQR.",
+        message=f"Detected {summary['outlier_count']} outlier row(s) in '{column}' using IQR."
+        + _truncate_warning(total_outliers, limit),
         data={**summary, "returned_rows": int(len(outliers))},
         table=_records(outliers),
     )
@@ -482,12 +498,14 @@ def filter_rows_tool(dataframe: pd.DataFrame, arguments: dict[str, Any]) -> Tool
 
     _require_column(dataframe, column)
     mask = _build_filter_mask(dataframe[column], operator, value)
+    total_matched = int(mask.sum())
     filtered = dataframe.loc[mask].head(limit)
 
     return ToolResult(
         tool_name="filter_rows",
         status="success",
-        message=f"Filtered {int(mask.sum())} matching row(s) for '{column}' {operator}.",
+        message=f"Filtered {total_matched} matching row(s) for '{column}' {operator}."
+        + _truncate_warning(total_matched, limit),
         data={
             "matched_rows": int(mask.sum()),
             "returned_rows": int(len(filtered)),
